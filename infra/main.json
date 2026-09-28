@@ -1,0 +1,1940 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.47.16.16243",
+      "templateHash": "13710907692564123136"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Azure region for APIM and supporting resources."
+      }
+    },
+    "apimName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the API Management instance."
+      }
+    },
+    "apimPublisherName": {
+      "type": "string",
+      "defaultValue": "GHCP BYOK",
+      "metadata": {
+        "description": "APIM publisher display name."
+      }
+    },
+    "apimPublisherEmail": {
+      "type": "string",
+      "metadata": {
+        "description": "APIM publisher contact email."
+      }
+    },
+    "apimSkuName": {
+      "type": "string",
+      "defaultValue": "Developer",
+      "allowedValues": [
+        "Developer",
+        "Basic",
+        "BasicV2",
+        "Standard",
+        "StandardV2",
+        "Premium",
+        "PremiumV2"
+      ]
+    },
+    "apimSkuCapacity": {
+      "type": "int",
+      "defaultValue": 1,
+      "minValue": 1
+    },
+    "foundryAccountName": {
+      "type": "string",
+      "metadata": {
+        "description": "Microsoft Foundry / Azure OpenAI resource name."
+      }
+    },
+    "foundryAccountSubscriptionId": {
+      "type": "string",
+      "defaultValue": "[subscription().subscriptionId]",
+      "metadata": {
+        "description": "Subscription that contains the Foundry resource. Defaults to the APIM deployment subscription."
+      }
+    },
+    "foundryAccountResourceGroup": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().name]",
+      "metadata": {
+        "description": "Resource group that contains the Foundry resource."
+      }
+    },
+    "foundryBackendBaseUrl": {
+      "type": "string",
+      "minLength": 1,
+      "metadata": {
+        "description": "Backend base URL, for example https://contoso.openai.azure.com."
+      }
+    },
+    "foundryBackends": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional: additional Foundry accounts to form a load-balanced, circuit-broken backend pool. Each entry: { accountName, backendBaseUrl, subscriptionId?, resourceGroup?, priority?, weight? }. When non-empty, requests route through a pool named foundry-backend and every listed account must expose equivalent deployment names; when empty (default), the single primary backend is used. /models still lists the primary account only."
+      }
+    },
+    "foundryApiVersion": {
+      "type": "string",
+      "defaultValue": "2024-06-01",
+      "metadata": {
+        "description": "Azure OpenAI-compatible API version to send to the backend."
+      }
+    },
+    "foundryDeploymentsApiVersion": {
+      "type": "string",
+      "defaultValue": "2023-03-15-preview",
+      "metadata": {
+        "description": "Data-plane API version used to list Foundry deployments for the /models endpoint."
+      }
+    },
+    "foundryProjectName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Foundry project name. When set, the /models endpoint also lists the project deployments (including managed-compute models like cohere-north-mini-code) via the AI Foundry project data plane, so they appear automatically without extraModelIds."
+      }
+    },
+    "foundryProjectDeploymentsApiVersion": {
+      "type": "string",
+      "defaultValue": "2025-05-01",
+      "metadata": {
+        "description": "API version for the AI Foundry project deployments listing used by /models."
+      }
+    },
+    "extraModelIds": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Extra model ids to merge into the live /models list. A manual safety net for deployments that are callable but not returned by the live deployment listings."
+      }
+    },
+    "cohereBackendBaseUrl": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional managed online endpoint (for example Cohere) base URL, ending at the score API version, for example https://<endpoint>.<region>.inference.ml.azure.com/score/v1. Orgs listed in cohereOrgs route here instead of Foundry."
+      }
+    },
+    "cohereBackendResource": {
+      "type": "string",
+      "defaultValue": "https://ml.azure.com",
+      "metadata": {
+        "description": "AAD token audience for the managed online endpoint. Azure ML online endpoints accept tokens issued for https://ml.azure.com."
+      }
+    },
+    "cohereOrgs": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Org slugs that route to the managed online (Cohere) endpoint instead of Foundry. Must be a subset of orgs; requires cohereBackendBaseUrl."
+      }
+    },
+    "cohereModelIds": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Model ids advertised on /models for Cohere orgs. The managed endpoint does not expose a Foundry-style deployments listing, so ids are declared here."
+      }
+    },
+    "mcBackendBaseUrl": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional managed-compute (Azure ML online endpoint) base URL, ending at the score API version, for example https://<endpoint>.<region>.inference.ml.azure.com/score/v1. Orgs listed in mcOrgs route here. Distinct from the Cohere slot so it can use a different audience."
+      }
+    },
+    "mcBackendResource": {
+      "type": "string",
+      "defaultValue": "https://ml.azure.com",
+      "metadata": {
+        "description": "AAD token audience for the managed-compute endpoint. Azure ML online endpoints accept tokens issued for https://ml.azure.com."
+      }
+    },
+    "mcOrgs": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Org slugs that route to the managed-compute endpoint. Must be a subset of orgs; requires mcBackendBaseUrl."
+      }
+    },
+    "mcModelIds": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Model ids advertised on /models for managed-compute orgs (the endpoint has no deployments listing)."
+      }
+    },
+    "orgs": {
+      "type": "array",
+      "metadata": {
+        "description": "GitHub organization slugs that each get their own BYOK path (byok/<slug>), key, and policy. Use lowercase letters, numbers, and hyphens."
+      }
+    },
+    "orgModels": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Optional per-org model allowlist, keyed by org slug -> array of model ids that org may see and call. An org listed here has its /models filtered to these ids and any chat/responses request for another model rejected with 403. Orgs omitted (or mapped to an empty array) are unrestricted."
+      }
+    },
+    "defaultTemperatureModelIds": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Model deployment ids whose Chat Completions requests must use the default temperature of 1. Use for models that reject sampling temperatures sent by clients such as VS Code."
+      }
+    },
+    "orgKeys": {
+      "type": "secureObject",
+      "metadata": {
+        "description": "Per-org client keys, keyed by org slug. Each org registers its own enterprise BYOK provider with this key and base URL https://<apim>.azure-api.net/byok/<slug>. Provide via a secure params file or Key Vault reference."
+      }
+    },
+    "perOrgRateLimitCalls": {
+      "type": "int",
+      "defaultValue": 300,
+      "metadata": {
+        "description": "Per-org rate limit: maximum calls per renewal period, counted independently per org."
+      }
+    },
+    "perOrgRateLimitRenewalPeriod": {
+      "type": "int",
+      "defaultValue": 60,
+      "metadata": {
+        "description": "Per-org rate limit renewal period, in seconds."
+      }
+    },
+    "tokensPerMinuteDefault": {
+      "type": "int",
+      "defaultValue": 0,
+      "metadata": {
+        "description": "Default tokens-per-minute (TPM) limit applied to every org unless overridden in orgTokensPerMinute. 0 disables the per-minute limit. Enforced only on /chat/completions and /responses; exceeding it returns 429."
+      }
+    },
+    "orgTokensPerMinute": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Per-org tokens-per-minute overrides, keyed by org slug. Overrides tokensPerMinuteDefault for the listed orgs."
+      }
+    },
+    "monthlyTokenQuotaDefault": {
+      "type": "int",
+      "defaultValue": 0,
+      "metadata": {
+        "description": "Default monthly token quota applied to every org unless overridden in orgMonthlyTokenQuota. 0 disables the quota. Exceeding it returns 403 until the month resets (UTC)."
+      }
+    },
+    "orgMonthlyTokenQuota": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Per-org monthly token quota overrides, keyed by org slug."
+      }
+    },
+    "deployObservability": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Deploy observability (Log Analytics + Application Insights) and wire an APIM Application Insights logger. Required for enableTokenMetrics."
+      }
+    },
+    "logAnalyticsWorkspaceId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Existing Log Analytics workspace resource id to reuse for Application Insights. When empty and deployObservability is true, a new workspace is created."
+      }
+    },
+    "logAnalyticsWorkspaceName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Name for the Log Analytics workspace created when deployObservability is true and no workspace id is supplied. Defaults to <apimName>-logs."
+      }
+    },
+    "appInsightsName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Name for the Application Insights resource created when deployObservability is true. Defaults to <apimName>-ai."
+      }
+    },
+    "enableTokenMetrics": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Emit per-org LLM token metrics (llm-emit-token-metric) to Application Insights on /chat/completions and /responses. Requires deployObservability. Prompt and completion bodies are never logged."
+      }
+    },
+    "grantMetricsPublisherRole": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Grant the APIM identity Monitoring Metrics Publisher on Application Insights. Off by default: token metrics reach App Insights customMetrics via the logger connection string without it. Enable only to publish to the Azure Monitor custom-metric store, and only where the standard built-in role id resolves."
+      }
+    },
+    "deployContentSafety": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Deploy an Azure AI Content Safety resource and wire llm-content-safety prompt moderation. When false and contentSafetyEndpoint is empty, no content safety is applied."
+      }
+    },
+    "contentSafetyEndpoint": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Existing Azure AI Content Safety endpoint (https://<name>.cognitiveservices.azure.com) to reuse instead of deploying one. The APIM identity must already have Cognitive Services User on that resource."
+      }
+    },
+    "contentSafetyName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Name for the Content Safety resource created when deployContentSafety is true. Defaults to <apimName>-cs."
+      }
+    },
+    "contentSafetyEnabledDefault": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Enable content safety for every org by default. Per-org overrides in orgContentSafetyEnabled win. Applies only to /chat/completions and /responses."
+      }
+    },
+    "orgContentSafetyEnabled": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Per-org content safety enablement overrides, keyed by org slug (true/false)."
+      }
+    },
+    "contentSafetyShieldPrompt": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Enable Prompt Shields (jailbreak / prompt-injection detection) in the content safety check."
+      }
+    },
+    "contentSafetyOutputType": {
+      "type": "string",
+      "defaultValue": "FourSeverityLevels",
+      "allowedValues": [
+        "FourSeverityLevels",
+        "EightSeverityLevels"
+      ],
+      "metadata": {
+        "description": "Content safety severity scale used for category thresholds."
+      }
+    },
+    "contentSafetyHateThreshold": {
+      "type": "int",
+      "defaultValue": 4,
+      "metadata": {
+        "description": "Reject requests whose Hate severity is at or above this threshold. Range depends on contentSafetyOutputType."
+      }
+    },
+    "contentSafetySelfHarmThreshold": {
+      "type": "int",
+      "defaultValue": 4,
+      "metadata": {
+        "description": "Reject requests whose SelfHarm severity is at or above this threshold."
+      }
+    },
+    "contentSafetySexualThreshold": {
+      "type": "int",
+      "defaultValue": 4,
+      "metadata": {
+        "description": "Reject requests whose Sexual severity is at or above this threshold."
+      }
+    },
+    "contentSafetyViolenceThreshold": {
+      "type": "int",
+      "defaultValue": 4,
+      "metadata": {
+        "description": "Reject requests whose Violence severity is at or above this threshold."
+      }
+    },
+    "contentSafetyBlocklists": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional Content Safety blocklist names to enforce on requests."
+      }
+    },
+    "deploySemanticCache": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Deploy Azure Managed Redis (with RediSearch) + an APIM external cache and enable llm-semantic-cache on /chat/completions only. Requires an embeddings deployment on the Foundry account (embeddingsDeploymentName)."
+      }
+    },
+    "redisCacheName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Name for the Azure Managed Redis cache created when deploySemanticCache is true. Defaults to <apimName>-redis."
+      }
+    },
+    "redisSku": {
+      "type": "string",
+      "defaultValue": "Balanced_B0",
+      "metadata": {
+        "description": "Azure Managed Redis SKU for the semantic cache (for example Balanced_B0)."
+      }
+    },
+    "embeddingsDeploymentName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Embeddings deployment name on the Foundry account, used to vectorize prompts for semantic cache lookup. Required when deploySemanticCache is true."
+      }
+    },
+    "semanticCacheScoreThreshold": {
+      "type": "string",
+      "defaultValue": "0.05",
+      "metadata": {
+        "description": "Semantic cache similarity score threshold (0.0-1.0, as a string). Lower is stricter; values above 0.2 risk cache mismatch. Start conservative."
+      }
+    },
+    "semanticCacheDurationSeconds": {
+      "type": "int",
+      "defaultValue": 120,
+      "metadata": {
+        "description": "Cached response TTL in seconds for llm-semantic-cache-store."
+      }
+    },
+    "semanticCacheMaxMessageCount": {
+      "type": "int",
+      "defaultValue": 4,
+      "metadata": {
+        "description": "Skip caching once a chat dialog has more than this many messages (long multi-turn threads cache poorly)."
+      }
+    },
+    "semanticCacheEnabledDefault": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Enable semantic caching for every org by default. Per-org overrides in orgSemanticCacheEnabled win. Applies to /chat/completions only."
+      }
+    },
+    "orgSemanticCacheEnabled": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Per-org semantic cache enablement overrides, keyed by org slug (true/false)."
+      }
+    },
+    "deployAppGateway": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Deploy an Application Gateway (WAF_v2) in front of the public APIM instance and enforce that requests arrive through it."
+      }
+    },
+    "appGwName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Name of the Application Gateway (required when deployAppGateway is true)."
+      }
+    },
+    "appGwSharedSecret": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Shared secret that App Gateway injects as X-AppGw-Secret and APIM validates. Generate a strong random value; provide via a secure params file or Key Vault."
+      }
+    },
+    "appGwWafMode": {
+      "type": "string",
+      "defaultValue": "Detection",
+      "allowedValues": [
+        "Detection",
+        "Prevention"
+      ],
+      "metadata": {
+        "description": "WAF mode for the Application Gateway. Start in Detection for an LLM gateway, tune false positives on chat prompts, then switch to Prevention."
+      }
+    },
+    "appGwCapacity": {
+      "type": "int",
+      "defaultValue": 1,
+      "minValue": 1,
+      "metadata": {
+        "description": "Instance count for the Application Gateway."
+      }
+    },
+    "appGwEnableHttps": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Enable an HTTPS listener (443) on the App Gateway with HTTP->HTTPS redirect. Requires appGwHttpsPfxBase64 and appGwHttpsPfxPassword."
+      }
+    },
+    "appGwHttpsPfxBase64": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Base64-encoded PFX (full chain) for the App Gateway HTTPS listener."
+      }
+    },
+    "appGwHttpsPfxPassword": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Password protecting the PFX in appGwHttpsPfxBase64."
+      }
+    },
+    "appGwAllowedClientIp": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional: also restrict APIM inbound to this IP via ip-filter (typically the App Gateway public IP, known after the first deploy). Leave empty to rely on the X-AppGw-Secret header only."
+      }
+    },
+    "tags": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Optional tags applied to deployed resources."
+      }
+    }
+  },
+  "variables": {
+    "copy": [
+      {
+        "name": "orgTpm",
+        "count": "[length(parameters('orgs'))]",
+        "input": "[if(contains(parameters('orgTokensPerMinute'), parameters('orgs')[copyIndex('orgTpm')]), int(parameters('orgTokensPerMinute')[parameters('orgs')[copyIndex('orgTpm')]]), parameters('tokensPerMinuteDefault'))]"
+      },
+      {
+        "name": "orgQuota",
+        "count": "[length(parameters('orgs'))]",
+        "input": "[if(contains(parameters('orgMonthlyTokenQuota'), parameters('orgs')[copyIndex('orgQuota')]), int(parameters('orgMonthlyTokenQuota')[parameters('orgs')[copyIndex('orgQuota')]]), parameters('monthlyTokenQuotaDefault'))]"
+      },
+      {
+        "name": "orgTpmAttr",
+        "count": "[length(parameters('orgs'))]",
+        "input": "[if(greater(variables('orgTpm')[copyIndex('orgTpmAttr')], 0), format(' tokens-per-minute=\"{0}\"', variables('orgTpm')[copyIndex('orgTpmAttr')]), '')]"
+      },
+      {
+        "name": "orgQuotaAttr",
+        "count": "[length(parameters('orgs'))]",
+        "input": "[if(greater(variables('orgQuota')[copyIndex('orgQuotaAttr')], 0), format(' token-quota=\"{0}\" token-quota-period=\"Monthly\"', variables('orgQuota')[copyIndex('orgQuotaAttr')]), '')]"
+      },
+      {
+        "name": "orgTokenLimitXml",
+        "count": "[length(parameters('orgs'))]",
+        "input": "[if(or(greater(variables('orgTpm')[copyIndex('orgTokenLimitXml')], 0), greater(variables('orgQuota')[copyIndex('orgTokenLimitXml')], 0)), format('<llm-token-limit counter-key=\"@((string)context.Variables[&quot;byokOrg&quot;])\"{0}{1} estimate-prompt-tokens=\"true\" remaining-tokens-header-name=\"x-ratelimit-remaining-tokens\" remaining-quota-tokens-header-name=\"x-ratelimit-remaining-quota-tokens\" tokens-consumed-header-name=\"x-ratelimit-consumed-tokens\" />', variables('orgTpmAttr')[copyIndex('orgTokenLimitXml')], variables('orgQuotaAttr')[copyIndex('orgTokenLimitXml')]), '')]"
+      },
+      {
+        "name": "orgContentSafetyXml",
+        "count": "[length(parameters('orgs'))]",
+        "input": "[if(and(variables('useContentSafety'), if(contains(parameters('orgContentSafetyEnabled'), parameters('orgs')[copyIndex('orgContentSafetyXml')]), bool(parameters('orgContentSafetyEnabled')[parameters('orgs')[copyIndex('orgContentSafetyXml')]]), parameters('contentSafetyEnabledDefault'))), variables('contentSafetyXml'), '')]"
+      },
+      {
+        "name": "orgCacheEnabled",
+        "count": "[length(parameters('orgs'))]",
+        "input": "[and(variables('useSemanticCache'), if(contains(parameters('orgSemanticCacheEnabled'), parameters('orgs')[copyIndex('orgCacheEnabled')]), bool(parameters('orgSemanticCacheEnabled')[parameters('orgs')[copyIndex('orgCacheEnabled')]]), parameters('semanticCacheEnabledDefault')))]"
+      },
+      {
+        "name": "orgCacheLookupXml",
+        "count": "[length(parameters('orgs'))]",
+        "input": "[if(variables('orgCacheEnabled')[copyIndex('orgCacheLookupXml')], format('<llm-semantic-cache-lookup score-threshold=\"{0}\" embeddings-backend-id=\"{1}\" embeddings-backend-auth=\"system-assigned\" ignore-system-messages=\"true\" max-message-count=\"{2}\"><vary-by>@((string)context.Variables[&quot;byokOrg&quot;])</vary-by><vary-by>@((string)context.Variables[&quot;byokModel&quot;])</vary-by></llm-semantic-cache-lookup>', parameters('semanticCacheScoreThreshold'), variables('embeddingsBackendId'), parameters('semanticCacheMaxMessageCount')), '')]"
+      },
+      {
+        "name": "orgCacheStoreXml",
+        "count": "[length(parameters('orgs'))]",
+        "input": "[if(variables('orgCacheEnabled')[copyIndex('orgCacheStoreXml')], format('<llm-semantic-cache-store duration=\"{0}\" />', parameters('semanticCacheDurationSeconds')), '')]"
+      },
+      {
+        "name": "orgTokenGovernanceXml",
+        "count": "[length(parameters('orgs'))]",
+        "input": "[format('{0}{1}', variables('orgTokenLimitXml')[copyIndex('orgTokenGovernanceXml')], variables('tokenMetricXml'))]"
+      },
+      {
+        "name": "orgAiGovernanceXml",
+        "count": "[length(parameters('orgs'))]",
+        "input": "[format('{0}{1}{2}', variables('orgContentSafetyXml')[copyIndex('orgAiGovernanceXml')], variables('orgTokenLimitXml')[copyIndex('orgAiGovernanceXml')], variables('tokenMetricXml'))]"
+      },
+      {
+        "name": "foundryPoolMembersSpec",
+        "count": "[length(parameters('foundryBackends'))]",
+        "input": {
+          "accountName": "[parameters('foundryBackends')[copyIndex('foundryPoolMembersSpec')].accountName]",
+          "baseUrl": "[if(endsWith(parameters('foundryBackends')[copyIndex('foundryPoolMembersSpec')].backendBaseUrl, '/'), substring(parameters('foundryBackends')[copyIndex('foundryPoolMembersSpec')].backendBaseUrl, 0, sub(length(parameters('foundryBackends')[copyIndex('foundryPoolMembersSpec')].backendBaseUrl), 1)), parameters('foundryBackends')[copyIndex('foundryPoolMembersSpec')].backendBaseUrl)]",
+          "subscriptionId": "[coalesce(tryGet(parameters('foundryBackends')[copyIndex('foundryPoolMembersSpec')], 'subscriptionId'), parameters('foundryAccountSubscriptionId'))]",
+          "resourceGroup": "[coalesce(tryGet(parameters('foundryBackends')[copyIndex('foundryPoolMembersSpec')], 'resourceGroup'), parameters('foundryAccountResourceGroup'))]",
+          "priority": "[int(coalesce(tryGet(parameters('foundryBackends')[copyIndex('foundryPoolMembersSpec')], 'priority'), 1))]",
+          "weight": "[int(coalesce(tryGet(parameters('foundryBackends')[copyIndex('foundryPoolMembersSpec')], 'weight'), 1))]"
+        }
+      }
+    ],
+    "$fxv#0": "<policies>\r\n  <inbound>\r\n    <base />\r\n    <!-- Account-level (OpenAI-format) deployments. Reliable, cognitiveservices audience. -->\r\n    <send-request mode=\"new\" response-variable-name=\"acctDeployments\" timeout=\"20\" ignore-error=\"true\">\r\n      <set-url>{{foundryDeploymentsUrl}}</set-url>\r\n      <set-method>GET</set-method>\r\n      <authentication-managed-identity resource=\"https://cognitiveservices.azure.com\" />\r\n    </send-request>\r\n    <!-- Project deployments (AI Foundry data plane). Adds managed-compute models that do not\r\n         appear in the account listing. Skipped when no project is configured. -->\r\n    <choose>\r\n      <when condition=\"@(!&quot;{{foundryProjectDeploymentsUrl}}&quot;.Equals(&quot;https://disabled.invalid&quot;, StringComparison.OrdinalIgnoreCase))\">\r\n        <send-request mode=\"new\" response-variable-name=\"projDeployments\" timeout=\"20\" ignore-error=\"true\">\r\n          <set-url>{{foundryProjectDeploymentsUrl}}</set-url>\r\n          <set-method>GET</set-method>\r\n          <authentication-managed-identity resource=\"https://ai.azure.com\" />\r\n        </send-request>\r\n      </when>\r\n    </choose>\r\n    <choose>\r\n      <when condition=\"@((context.Variables.ContainsKey(&quot;acctDeployments&quot;) &amp;&amp; ((IResponse)context.Variables[&quot;acctDeployments&quot;]).StatusCode == 200) || (context.Variables.ContainsKey(&quot;projDeployments&quot;) &amp;&amp; ((IResponse)context.Variables[&quot;projDeployments&quot;]).StatusCode == 200))\">\r\n        <return-response>\r\n          <set-status code=\"200\" reason=\"OK\" />\r\n          <set-header name=\"Content-Type\" exists-action=\"override\">\r\n            <value>application/json</value>\r\n          </set-header>\r\n          <set-body><![CDATA[@{\r\n              var created = DateTimeOffset.UtcNow.ToUnixTimeSeconds();\r\n              var data = new JArray();\r\n              var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);\r\n              var allow = new HashSet<string>(StringComparer.OrdinalIgnoreCase);\r\n              foreach (var a in \"__ALLOWED_MODELS_CSV__\".Split(new char[]{','}, StringSplitOptions.RemoveEmptyEntries)) { var t = a.Trim(); if (t.Length > 0) { allow.Add(t); } }\r\n              if (context.Variables.ContainsKey(\"acctDeployments\")) {\r\n                  var r = (IResponse)context.Variables[\"acctDeployments\"];\r\n                  if (r.StatusCode == 200) {\r\n                      var arr = r.Body.As<JObject>(preserveContent: true)[\"data\"] as JArray ?? new JArray();\r\n                      foreach (var d in arr) {\r\n                          var id = (string)d[\"id\"];\r\n                          if (!string.IsNullOrWhiteSpace(id) && (allow.Count == 0 || allow.Contains(id)) && seen.Add(id)) {\r\n                              data.Add(new JObject {\r\n                                  [\"id\"] = id,\r\n                                  [\"object\"] = \"model\",\r\n                                  [\"created\"] = created,\r\n                                  [\"owned_by\"] = (string)(d[\"owned_by\"] ?? d[\"owner\"]) ?? \"azure-openai\"\r\n                              });\r\n                          }\r\n                      }\r\n                  }\r\n              }\r\n              if (context.Variables.ContainsKey(\"projDeployments\")) {\r\n                  var r = (IResponse)context.Variables[\"projDeployments\"];\r\n                  if (r.StatusCode == 200) {\r\n                      var arr = r.Body.As<JObject>(preserveContent: true)[\"value\"] as JArray ?? new JArray();\r\n                      foreach (var d in arr) {\r\n                          var id = (string)d[\"name\"];\r\n                          if (!string.IsNullOrWhiteSpace(id) && (allow.Count == 0 || allow.Contains(id)) && seen.Add(id)) {\r\n                              data.Add(new JObject {\r\n                                  [\"id\"] = id,\r\n                                  [\"object\"] = \"model\",\r\n                                  [\"created\"] = created,\r\n                                  [\"owned_by\"] = \"azure-foundry\"\r\n                              });\r\n                          }\r\n                      }\r\n                  }\r\n              }\r\n              foreach (var em in new string[] { __EXTRA_MODELS_JSON__ }) {\r\n                  if (!string.IsNullOrWhiteSpace(em) && (allow.Count == 0 || allow.Contains(em)) && seen.Add(em)) {\r\n                      data.Add(new JObject {\r\n                          [\"id\"] = em,\r\n                          [\"object\"] = \"model\",\r\n                          [\"created\"] = created,\r\n                          [\"owned_by\"] = \"azure-ml\"\r\n                      });\r\n                  }\r\n              }\r\n              return new JObject {\r\n                  [\"object\"] = \"list\",\r\n                  [\"data\"] = data\r\n              }.ToString();\r\n          }]]></set-body>\r\n        </return-response>\r\n      </when>\r\n      <otherwise>\r\n        <return-response>\r\n          <set-status code=\"502\" reason=\"Bad Gateway\" />\r\n          <set-header name=\"Content-Type\" exists-action=\"override\">\r\n            <value>application/json</value>\r\n          </set-header>\r\n          <set-body><![CDATA[@{\r\n              var status = context.Variables.ContainsKey(\"acctDeployments\")\r\n                  ? ((IResponse)context.Variables[\"acctDeployments\"]).StatusCode.ToString()\r\n                  : \"no response\";\r\n              return new JObject {\r\n                  [\"error\"] = new JObject {\r\n                      [\"message\"] = \"Failed to list Foundry deployments (upstream status: \" + status + \").\",\r\n                      [\"type\"] = \"api_error\",\r\n                      [\"code\"] = \"deployments_unavailable\"\r\n                  }\r\n              }.ToString();\r\n          }]]></set-body>\r\n        </return-response>\r\n      </otherwise>\r\n    </choose>\r\n  </inbound>\r\n  <backend>\r\n    <base />\r\n  </backend>\r\n  <outbound>\r\n    <base />\r\n  </outbound>\r\n  <on-error>\r\n    <base />\r\n  </on-error>\r\n</policies>\r\n",
+    "$fxv#1": "<policies>\r\n  <inbound>\r\n    <base />\r\n    __AI_CONTENT_SAFETY__\r\n    __AI_CACHE_LOOKUP__\r\n    __AI_TOKEN_GOVERNANCE__\r\n    <set-body><![CDATA[@{\r\n        var body = context.Request.Body.As<JObject>(preserveContent: true);\r\n\r\n        var model = (string)body[\"model\"];\r\n        var defaultTemperatureModels = new string[] { __DEFAULT_TEMPERATURE_MODELS_JSON__ };\r\n        var requiresDefaultTemperature = false;\r\n        foreach (var modelId in defaultTemperatureModels)\r\n        {\r\n          if (String.Equals(model, modelId, StringComparison.OrdinalIgnoreCase))\r\n          {\r\n            requiresDefaultTemperature = true;\r\n            break;\r\n          }\r\n        }\r\n\r\n        if (requiresDefaultTemperature && body[\"temperature\"] != null)\r\n        {\r\n          body[\"temperature\"] = 1;\r\n        }\r\n\r\n        var tools = body[\"tools\"] as JArray;\r\n        if (tools != null)\r\n        {\r\n            foreach (var tool in tools)\r\n            {\r\n                var fn = tool?[\"function\"] as JObject;\r\n                if (fn != null)\r\n                {\r\n                    var strictToken = fn[\"strict\"];\r\n                    if (strictToken == null || strictToken.Type == JTokenType.Null)\r\n                    {\r\n                        fn[\"strict\"] = false;\r\n                    }\r\n                }\r\n            }\r\n        }\r\n\r\n        return body.ToString();\r\n    }]]></set-body>\r\n  </inbound>\r\n  <backend>\r\n    <base />\r\n  </backend>\r\n  <outbound>\r\n    __AI_CACHE_STORE__\r\n    <base />\r\n  </outbound>\r\n  <on-error>\r\n    <base />\r\n  </on-error>\r\n</policies>\r\n",
+    "openApiPath": "openapi/byok-proxy.openapi.json",
+    "policyTemplatePath": "policies/byok-proxy.xml",
+    "modelsPolicyPath": "policies/models.xml",
+    "chatCompletionsPolicyPath": "policies/chat-completions.xml",
+    "responsesPolicyPath": "policies/responses.xml",
+    "appGwGuardPath": "policies/appgw-guard.xml",
+    "staticModelsPath": "policies/models-static.xml",
+    "backendId": "foundry-backend",
+    "cohereBackendId": "cohere-backend",
+    "mcBackendId": "managed-compute-backend",
+    "openApiSpec": "{\r\n  \"openapi\": \"3.0.3\",\r\n  \"info\": {\r\n    \"title\": \"BYOK Foundry Proxy\",\r\n    \"version\": \"1.0.0\",\r\n    \"description\": \"OpenAI-compatible proxy surface that APIM publishes to GHCP.\"\r\n  },\r\n  \"paths\": {\r\n    \"/models\": {\r\n      \"get\": {\r\n        \"operationId\": \"listModels\",\r\n        \"summary\": \"List the models available through the proxy\",\r\n        \"description\": \"Returns the Foundry deployments on the backend account in OpenAI list-models format. The deployment id is the value clients pass as `model`.\",\r\n        \"responses\": {\r\n          \"200\": {\r\n            \"description\": \"An OpenAI-compatible list of available models\",\r\n            \"content\": {\r\n              \"application/json\": {\r\n                \"schema\": {\r\n                  \"type\": \"object\",\r\n                  \"properties\": {\r\n                    \"object\": {\r\n                      \"type\": \"string\"\r\n                    },\r\n                    \"data\": {\r\n                      \"type\": \"array\",\r\n                      \"items\": {\r\n                        \"type\": \"object\",\r\n                        \"properties\": {\r\n                          \"id\": {\r\n                            \"type\": \"string\"\r\n                          },\r\n                          \"object\": {\r\n                            \"type\": \"string\"\r\n                          },\r\n                          \"created\": {\r\n                            \"type\": \"integer\"\r\n                          },\r\n                          \"owned_by\": {\r\n                            \"type\": \"string\"\r\n                          }\r\n                        }\r\n                      }\r\n                    }\r\n                  }\r\n                }\r\n              }\r\n            }\r\n          }\r\n        }\r\n      }\r\n    },\r\n    \"/chat/completions\": {\r\n      \"post\": {\r\n        \"operationId\": \"createChatCompletion\",\r\n        \"summary\": \"Proxy a chat completion request\",\r\n        \"requestBody\": {\r\n          \"required\": true,\r\n          \"content\": {\r\n            \"application/json\": {\r\n              \"schema\": {\r\n                \"type\": \"object\",\r\n                \"properties\": {\r\n                  \"messages\": {\r\n                    \"type\": \"array\",\r\n                    \"items\": {\r\n                      \"type\": \"object\"\r\n                    }\r\n                  },\r\n                  \"model\": {\r\n                    \"type\": \"string\"\r\n                  },\r\n                  \"temperature\": {\r\n                    \"type\": \"number\"\r\n                  }\r\n                },\r\n                \"required\": [\r\n                  \"messages\"\r\n                ]\r\n              }\r\n            }\r\n          }\r\n        },\r\n        \"responses\": {\r\n          \"200\": {\r\n            \"description\": \"A successful completion response\",\r\n            \"content\": {\r\n              \"application/json\": {\r\n                \"schema\": {\r\n                  \"type\": \"object\"\r\n                }\r\n              }\r\n            }\r\n          }\r\n        }\r\n      }\r\n    },\r\n    \"/responses\": {\r\n      \"post\": {\r\n        \"operationId\": \"createResponse\",\r\n        \"summary\": \"Proxy a Responses API request\",\r\n        \"description\": \"OpenAI Responses API — used by newer Copilot models instead of /chat/completions. The request body is forwarded as-is to the Foundry backend at /openai/v1/responses.\",\r\n        \"requestBody\": {\r\n          \"required\": true,\r\n          \"content\": {\r\n            \"application/json\": {\r\n              \"schema\": {\r\n                \"type\": \"object\",\r\n                \"properties\": {\r\n                  \"model\": {\r\n                    \"type\": \"string\",\r\n                    \"description\": \"The Foundry deployment name to target.\"\r\n                  },\r\n                  \"input\": {\r\n                    \"description\": \"Text prompt or array of input items.\",\r\n                    \"oneOf\": [\r\n                      { \"type\": \"string\" },\r\n                      { \"type\": \"array\", \"items\": { \"type\": \"object\" } }\r\n                    ]\r\n                  },\r\n                  \"instructions\": {\r\n                    \"type\": \"string\",\r\n                    \"description\": \"System-level instructions (equivalent to a system message).\"\r\n                  },\r\n                  \"tools\": {\r\n                    \"type\": \"array\",\r\n                    \"items\": { \"type\": \"object\" }\r\n                  },\r\n                  \"stream\": {\r\n                    \"type\": \"boolean\"\r\n                  }\r\n                },\r\n                \"required\": [\r\n                  \"model\",\r\n                  \"input\"\r\n                ]\r\n              }\r\n            }\r\n          }\r\n        },\r\n        \"responses\": {\r\n          \"200\": {\r\n            \"description\": \"A successful Responses API response\",\r\n            \"content\": {\r\n              \"application/json\": {\r\n                \"schema\": {\r\n                  \"type\": \"object\"\r\n                }\r\n              },\r\n              \"text/event-stream\": {\r\n                \"schema\": {\r\n                  \"type\": \"string\"\r\n                }\r\n              }\r\n            }\r\n          }\r\n        }\r\n      }\r\n    }\r\n  }\r\n}\r\n",
+    "policyTemplate": "<policies>\r\n  <inbound>\r\n    <base />\r\n    __APPGW_GUARD__\r\n    <!--\r\n      Per-org auth. This policy is templated per organization at deploy time:\r\n        __ORG_KEY_NV__  -> {{byokKey-<org>}}  (that org's secret named value)\r\n        __ORG_SLUG__    -> <org>              (the org slug, used for attribution + throttling)\r\n        __RATE_CALLS__ / __RATE_PERIOD__ -> per-org rate-limit-by-key settings\r\n      The presented key is bound to THIS org's path: a key issued to another org\r\n      fails the comparison here and is rejected with 401, so callers cannot shift\r\n      cost by repointing at a different /byok/<org> URL.\r\n    -->\r\n    <set-variable name=\"presentedKey\" value=\"@{\r\n        var auth = context.Request.Headers.GetValueOrDefault(&quot;Authorization&quot;, &quot;&quot;);\r\n        return auth.StartsWith(&quot;Bearer &quot;, StringComparison.OrdinalIgnoreCase)\r\n            ? auth.Substring(&quot;Bearer &quot;.Length).Trim()\r\n            : &quot;&quot;;\r\n    }\" />\r\n    <choose>\r\n      <when condition=\"@(string.IsNullOrEmpty((string)context.Variables[&quot;presentedKey&quot;]) || (string)context.Variables[&quot;presentedKey&quot;] != &quot;__ORG_KEY_NV__&quot;)\">\r\n        <return-response>\r\n          <set-status code=\"401\" reason=\"Unauthorized\" />\r\n          <set-header name=\"WWW-Authenticate\" exists-action=\"override\">\r\n            <value>Bearer error=\"invalid_token\"</value>\r\n          </set-header>\r\n          <set-header name=\"Content-Type\" exists-action=\"override\">\r\n            <value>application/json</value>\r\n          </set-header>\r\n          <set-body>{\"error\":{\"message\":\"Invalid or missing API key.\",\"type\":\"invalid_request_error\",\"code\":\"invalid_api_key\"}}</set-body>\r\n        </return-response>\r\n      </when>\r\n    </choose>\r\n    <set-variable name=\"byokOrg\" value=\"__ORG_SLUG__\" />\r\n    <!-- Capture the requested model once (POST only) for reuse by the allowlist and token metrics. -->\r\n    <set-variable name=\"byokModel\" value=\"@{\r\n        if (!context.Request.Method.Equals(&quot;POST&quot;, StringComparison.OrdinalIgnoreCase)) { return &quot;n/a&quot;; }\r\n        try { return (string)context.Request.Body.As&lt;JObject&gt;(preserveContent: true)[&quot;model&quot;] ?? &quot;unknown&quot;; } catch { return &quot;unknown&quot;; }\r\n    }\" />\r\n    <!-- Per-org throttling. counter-key is the org slug, so limits are isolated per organization. -->\r\n    <rate-limit-by-key calls=\"__RATE_CALLS__\" renewal-period=\"__RATE_PERIOD__\" counter-key=\"@((string)context.Variables[&quot;byokOrg&quot;])\" />\r\n    <!-- Attribution: surfaces the org as a dimension in API Inspector / Application Insights. -->\r\n    <trace source=\"byok\" severity=\"information\">\r\n      <message>@(\"byok org=\" + (string)context.Variables[\"byokOrg\"] + \" op=\" + context.Operation.Id)</message>\r\n      <metadata name=\"byokOrg\" value=\"@((string)context.Variables[&quot;byokOrg&quot;])\" />\r\n    </trace>\r\n    <!-- Per-org model allowlist. When __ALLOWED_MODELS_CSV__ is non-empty, POST requests\r\n         (chat/completions, responses) must name a permitted model or are rejected with 403.\r\n         Empty list = no restriction. GET /models carries no body and is skipped here; the\r\n         /models operation policy filters the advertised list to the same allowlist. -->\r\n    <choose>\r\n      <when condition=\"@{\r\n          var allow = new HashSet&lt;string&gt;(StringComparer.OrdinalIgnoreCase);\r\n          foreach (var a in &quot;__ALLOWED_MODELS_CSV__&quot;.Split(new char[]{','}, StringSplitOptions.RemoveEmptyEntries)) { var t = a.Trim(); if (t.Length &gt; 0) { allow.Add(t); } }\r\n          if (allow.Count == 0) { return false; }\r\n          if (context.Request.Method != &quot;POST&quot;) { return false; }\r\n          var model = (string)context.Variables[&quot;byokModel&quot;];\r\n          return string.IsNullOrEmpty(model) || !allow.Contains(model);\r\n      }\">\r\n        <return-response>\r\n          <set-status code=\"403\" reason=\"Forbidden\" />\r\n          <set-header name=\"Content-Type\" exists-action=\"override\">\r\n            <value>application/json</value>\r\n          </set-header>\r\n          <set-body>{\"error\":{\"message\":\"The requested model is not permitted for this organization.\",\"type\":\"invalid_request_error\",\"code\":\"model_not_allowed\"}}</set-body>\r\n        </return-response>\r\n      </when>\r\n    </choose>\r\n    <set-backend-service backend-id=\"__BACKEND_ID__\" />\r\n  </inbound>\r\n  <backend>\r\n    <base />\r\n  </backend>\r\n  <outbound>\r\n    <base />\r\n  </outbound>\r\n  <on-error>\r\n    <base />\r\n  </on-error>\r\n</policies>\r\n",
+    "modelsPolicyXml": "[replace(variables('$fxv#0'), '__EXTRA_MODELS_JSON__', join(map(parameters('extraModelIds'), lambda('m', format('\"{0}\"', lambdaVariables('m')))), ', '))]",
+    "defaultTemperatureModelIdsCsharp": "[join(map(parameters('defaultTemperatureModelIds'), lambda('m', format('\"{0}\"', lambdaVariables('m')))), ', ')]",
+    "chatCompletionsPolicyXml": "[replace(variables('$fxv#1'), '__DEFAULT_TEMPERATURE_MODELS_JSON__', variables('defaultTemperatureModelIdsCsharp'))]",
+    "responsesPolicyXml": "<policies>\r\n  <inbound>\r\n    <!-- Runs the API-level auth/attribution policy first (sets byokOrg + byokModel), then the\r\n         per-org AI governance block (token limits + token metrics). __AI_GOVERNANCE__ is\r\n         substituted per org at deploy time and is empty when no limits/metrics are configured. -->\r\n    <base />\r\n    __AI_GOVERNANCE__\r\n  </inbound>\r\n  <backend>\r\n    <base />\r\n  </backend>\r\n  <outbound>\r\n    <base />\r\n  </outbound>\r\n  <on-error>\r\n    <base />\r\n  </on-error>\r\n</policies>\r\n",
+    "appGwGuardTemplate": "<!--\r\n  App Gateway front-door enforcement (injected only when the App Gateway feature is enabled).\r\n  App Gateway adds X-AppGw-Secret to every forwarded request via a rewrite rule set. Because\r\n  the rewrite SETS the header, any value a client tries to supply is overwritten at the gateway.\r\n  A caller hitting the public APIM hostname directly does not carry the secret and is rejected\r\n  with 403, so the WAF cannot be bypassed. __APPGW_IPFILTER__ is optionally replaced with an\r\n  ip-filter that additionally restricts inbound traffic to App Gateway's public IP.\r\n-->\r\n<choose>\r\n  <when condition=\"@(context.Request.Headers.GetValueOrDefault(&quot;X-AppGw-Secret&quot;, &quot;&quot;) != &quot;{{appGwSecret}}&quot;)\">\r\n    <return-response>\r\n      <set-status code=\"403\" reason=\"Forbidden\" />\r\n      <set-header name=\"Content-Type\" exists-action=\"override\">\r\n        <value>application/json</value>\r\n      </set-header>\r\n      <set-body>{\"error\":{\"message\":\"Direct access is not permitted; requests must traverse the gateway.\",\"type\":\"invalid_request_error\",\"code\":\"gateway_required\"}}</set-body>\r\n    </return-response>\r\n  </when>\r\n</choose>\r\n__APPGW_IPFILTER__\r\n",
+    "staticModelsTemplate": "<policies>\r\n  <inbound>\r\n    <base />\r\n    <!--\r\n      Static /models response for orgs routed to a managed online endpoint (for example\r\n      Cohere), which does not expose a Foundry-style deployments listing. The advertised\r\n      model ids are injected at deploy time:\r\n        __MODELS_JSON__ -> comma-separated, quoted model id literals\r\n    -->\r\n    <return-response>\r\n      <set-status code=\"200\" reason=\"OK\" />\r\n      <set-header name=\"Content-Type\" exists-action=\"override\">\r\n        <value>application/json</value>\r\n      </set-header>\r\n      <set-body><![CDATA[@{\r\n          var created = DateTimeOffset.UtcNow.ToUnixTimeSeconds();\r\n          var allow = new HashSet<string>(StringComparer.OrdinalIgnoreCase);\r\n          foreach (var a in \"__ALLOWED_MODELS_CSV__\".Split(new char[]{','}, StringSplitOptions.RemoveEmptyEntries)) { var t = a.Trim(); if (t.Length > 0) { allow.Add(t); } }\r\n          var ids = new JArray(__MODELS_JSON__);\r\n          var data = new JArray();\r\n          foreach (var id in ids) {\r\n              var name = (string)id;\r\n              if (string.IsNullOrWhiteSpace(name)) { continue; }\r\n              if (allow.Count > 0 && !allow.Contains(name)) { continue; }\r\n              data.Add(new JObject {\r\n                  [\"id\"] = name,\r\n                  [\"object\"] = \"model\",\r\n                  [\"created\"] = created,\r\n                  [\"owned_by\"] = \"cohere\"\r\n              });\r\n          }\r\n          return new JObject {\r\n              [\"object\"] = \"list\",\r\n              [\"data\"] = data\r\n          }.ToString();\r\n      }]]></set-body>\r\n    </return-response>\r\n  </inbound>\r\n  <backend>\r\n    <base />\r\n  </backend>\r\n  <outbound>\r\n    <base />\r\n  </outbound>\r\n  <on-error>\r\n    <base />\r\n  </on-error>\r\n</policies>\r\n",
+    "normalizedFoundryBackendBaseUrl": "[if(endsWith(parameters('foundryBackendBaseUrl'), '/'), substring(parameters('foundryBackendBaseUrl'), 0, sub(length(parameters('foundryBackendBaseUrl')), 1)), parameters('foundryBackendBaseUrl'))]",
+    "foundryDeploymentsUrl": "[format('{0}/openai/deployments?api-version={1}', variables('normalizedFoundryBackendBaseUrl'), parameters('foundryDeploymentsApiVersion'))]",
+    "foundryProjectDeploymentsUrl": "[if(empty(parameters('foundryProjectName')), 'https://disabled.invalid', format('https://{0}.services.ai.azure.com/api/projects/{1}/deployments?api-version={2}', parameters('foundryAccountName'), parameters('foundryProjectName'), parameters('foundryProjectDeploymentsApiVersion')))]",
+    "deployCohereBackend": "[not(empty(parameters('cohereBackendBaseUrl')))]",
+    "cohereModelIdsCsharp": "[join(map(parameters('cohereModelIds'), lambda('m', format('\"{0}\"', lambdaVariables('m')))), ', ')]",
+    "cohereStaticModelsXml": "[replace(variables('staticModelsTemplate'), '__MODELS_JSON__', variables('cohereModelIdsCsharp'))]",
+    "deployMcBackend": "[not(empty(parameters('mcBackendBaseUrl')))]",
+    "mcModelIdsCsharp": "[join(map(parameters('mcModelIds'), lambda('m', format('\"{0}\"', lambdaVariables('m')))), ', ')]",
+    "mcStaticModelsXml": "[replace(variables('staticModelsTemplate'), '__MODELS_JSON__', variables('mcModelIdsCsharp'))]",
+    "appGwIpFilterXml": "[if(empty(parameters('appGwAllowedClientIp')), '', format('<ip-filter action=\"allow\"><address>{0}</address></ip-filter>', parameters('appGwAllowedClientIp')))]",
+    "appGwGuardXml": "[if(parameters('deployAppGateway'), replace(variables('appGwGuardTemplate'), '__APPGW_IPFILTER__', variables('appGwIpFilterXml')), '')]",
+    "tokenMetricXml": "[if(and(parameters('deployObservability'), parameters('enableTokenMetrics')), '<llm-emit-token-metric namespace=\"byok-llm\"><dimension name=\"byokOrg\" value=\"@((string)context.Variables[&quot;byokOrg&quot;])\" /><dimension name=\"model\" value=\"@((string)context.Variables[&quot;byokModel&quot;])\" /><dimension name=\"API ID\" /><dimension name=\"Operation ID\" /></llm-emit-token-metric>', '')]",
+    "contentSafetyBackendId": "content-safety-backend",
+    "useContentSafety": "[or(parameters('deployContentSafety'), not(empty(parameters('contentSafetyEndpoint'))))]",
+    "csBlocklistsXml": "[if(empty(parameters('contentSafetyBlocklists')), '', format('<blocklists>{0}</blocklists>', join(map(parameters('contentSafetyBlocklists'), lambda('b', format('<id>{0}</id>', lambdaVariables('b')))), '')))]",
+    "contentSafetyXml": "[format('<llm-content-safety backend-id=\"{0}\" shield-prompt=\"{1}\"><categories output-type=\"{2}\"><category name=\"Hate\" threshold=\"{3}\" /><category name=\"SelfHarm\" threshold=\"{4}\" /><category name=\"Sexual\" threshold=\"{5}\" /><category name=\"Violence\" threshold=\"{6}\" /></categories>{7}</llm-content-safety>', variables('contentSafetyBackendId'), toLower(string(parameters('contentSafetyShieldPrompt'))), parameters('contentSafetyOutputType'), parameters('contentSafetyHateThreshold'), parameters('contentSafetySelfHarmThreshold'), parameters('contentSafetySexualThreshold'), parameters('contentSafetyViolenceThreshold'), variables('csBlocklistsXml'))]",
+    "embeddingsBackendId": "embeddings-backend",
+    "useSemanticCache": "[parameters('deploySemanticCache')]",
+    "useFoundryPool": "[not(empty(parameters('foundryBackends')))]",
+    "foundryRbacTargets": "[if(variables('useFoundryPool'), map(variables('foundryPoolMembersSpec'), lambda('m', createObject('accountName', lambdaVariables('m').accountName, 'subscriptionId', lambdaVariables('m').subscriptionId, 'resourceGroup', lambdaVariables('m').resourceGroup))), createArray(createObject('accountName', parameters('foundryAccountName'), 'subscriptionId', parameters('foundryAccountSubscriptionId'), 'resourceGroup', parameters('foundryAccountResourceGroup'))))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.ApiManagement/service",
+      "apiVersion": "2023-05-01-preview",
+      "name": "[parameters('apimName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "sku": {
+        "name": "[parameters('apimSkuName')]",
+        "capacity": "[parameters('apimSkuCapacity')]"
+      },
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "publisherName": "[parameters('apimPublisherName')]",
+        "publisherEmail": "[parameters('apimPublisherEmail')]"
+      }
+    },
+    {
+      "condition": "[not(variables('useFoundryPool'))]",
+      "type": "Microsoft.ApiManagement/service/backends",
+      "apiVersion": "2023-05-01-preview",
+      "name": "[format('{0}/{1}', parameters('apimName'), variables('backendId'))]",
+      "properties": {
+        "title": "Microsoft Foundry",
+        "description": "Foundry deployment reached with the APIM managed identity.",
+        "protocol": "http",
+        "url": "[format('{0}/openai/v1', variables('normalizedFoundryBackendBaseUrl'))]",
+        "resourceId": "[format('{0}subscriptions/{1}/resourceGroups/{2}/providers/Microsoft.CognitiveServices/accounts/{3}', environment().resourceManager, parameters('foundryAccountSubscriptionId'), parameters('foundryAccountResourceGroup'), parameters('foundryAccountName'))]",
+        "credentials": {
+          "managedIdentity": {
+            "resource": "https://cognitiveservices.azure.com"
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]"
+      ]
+    },
+    {
+      "copy": {
+        "name": "foundryPoolMembers",
+        "count": "[length(variables('foundryPoolMembersSpec'))]"
+      },
+      "condition": "[variables('useFoundryPool')]",
+      "type": "Microsoft.ApiManagement/service/backends",
+      "apiVersion": "2024-06-01-preview",
+      "name": "[format('{0}/{1}', parameters('apimName'), format('{0}-{1}', variables('backendId'), copyIndex()))]",
+      "properties": {
+        "title": "[format('Microsoft Foundry pool member {0}', copyIndex())]",
+        "description": "[format('Foundry deployment {0} reached with the APIM managed identity.', variables('foundryPoolMembersSpec')[copyIndex()].accountName)]",
+        "protocol": "http",
+        "url": "[format('{0}/openai/v1', variables('foundryPoolMembersSpec')[copyIndex()].baseUrl)]",
+        "resourceId": "[format('{0}subscriptions/{1}/resourceGroups/{2}/providers/Microsoft.CognitiveServices/accounts/{3}', environment().resourceManager, variables('foundryPoolMembersSpec')[copyIndex()].subscriptionId, variables('foundryPoolMembersSpec')[copyIndex()].resourceGroup, variables('foundryPoolMembersSpec')[copyIndex()].accountName)]",
+        "credentials": {
+          "managedIdentity": {
+            "resource": "https://cognitiveservices.azure.com"
+          }
+        },
+        "circuitBreaker": {
+          "rules": [
+            {
+              "name": "foundryBreaker",
+              "failureCondition": {
+                "count": 3,
+                "interval": "PT1M",
+                "statusCodeRanges": [
+                  {
+                    "min": 429,
+                    "max": 429
+                  },
+                  {
+                    "min": 500,
+                    "max": 599
+                  }
+                ]
+              },
+              "tripDuration": "PT1M",
+              "acceptRetryAfter": true
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]"
+      ]
+    },
+    {
+      "condition": "[variables('useFoundryPool')]",
+      "type": "Microsoft.ApiManagement/service/backends",
+      "apiVersion": "2024-06-01-preview",
+      "name": "[format('{0}/{1}', parameters('apimName'), variables('backendId'))]",
+      "properties": {
+        "title": "Microsoft Foundry pool",
+        "description": "[format('Load-balanced pool across {0} Foundry account(s).', length(variables('foundryPoolMembersSpec')))]",
+        "type": "Pool",
+        "pool": {
+          "copy": [
+            {
+              "name": "services",
+              "count": "[length(variables('foundryPoolMembersSpec'))]",
+              "input": {
+                "id": "[resourceId('Microsoft.ApiManagement/service/backends', parameters('apimName'), format('{0}-{1}', variables('backendId'), copyIndex('services')))]",
+                "priority": "[variables('foundryPoolMembersSpec')[copyIndex('services')].priority]",
+                "weight": "[variables('foundryPoolMembersSpec')[copyIndex('services')].weight]"
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]",
+        "foundryPoolMembers"
+      ]
+    },
+    {
+      "condition": "[variables('deployCohereBackend')]",
+      "type": "Microsoft.ApiManagement/service/backends",
+      "apiVersion": "2023-05-01-preview",
+      "name": "[format('{0}/{1}', parameters('apimName'), variables('cohereBackendId'))]",
+      "properties": {
+        "title": "Cohere managed online endpoint",
+        "description": "Azure ML managed online endpoint reached with the APIM managed identity (AAD token, audience https://ml.azure.com).",
+        "protocol": "http",
+        "url": "[parameters('cohereBackendBaseUrl')]",
+        "credentials": {
+          "managedIdentity": {
+            "resource": "[parameters('cohereBackendResource')]"
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]"
+      ]
+    },
+    {
+      "condition": "[variables('deployMcBackend')]",
+      "type": "Microsoft.ApiManagement/service/backends",
+      "apiVersion": "2023-05-01-preview",
+      "name": "[format('{0}/{1}', parameters('apimName'), variables('mcBackendId'))]",
+      "properties": {
+        "title": "Managed-compute online endpoint",
+        "description": "Azure ML managed online endpoint reached with the APIM managed identity (AAD token, audience https://ml.azure.com). Requires the score/action role granted to the APIM MI on the endpoint.",
+        "protocol": "http",
+        "url": "[parameters('mcBackendBaseUrl')]",
+        "credentials": {
+          "managedIdentity": {
+            "resource": "[parameters('mcBackendResource')]"
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.ApiManagement/service/namedValues",
+      "apiVersion": "2023-05-01-preview",
+      "name": "[format('{0}/{1}', parameters('apimName'), 'foundryDeploymentsUrl')]",
+      "properties": {
+        "displayName": "foundryDeploymentsUrl",
+        "secret": false,
+        "value": "[variables('foundryDeploymentsUrl')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.ApiManagement/service/namedValues",
+      "apiVersion": "2023-05-01-preview",
+      "name": "[format('{0}/{1}', parameters('apimName'), 'foundryProjectDeploymentsUrl')]",
+      "properties": {
+        "displayName": "foundryProjectDeploymentsUrl",
+        "secret": false,
+        "value": "[variables('foundryProjectDeploymentsUrl')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]"
+      ]
+    },
+    {
+      "copy": {
+        "name": "orgKeyNamedValues",
+        "count": "[length(parameters('orgs'))]"
+      },
+      "type": "Microsoft.ApiManagement/service/namedValues",
+      "apiVersion": "2023-05-01-preview",
+      "name": "[format('{0}/{1}', parameters('apimName'), format('byokKey-{0}', parameters('orgs')[copyIndex()]))]",
+      "properties": {
+        "displayName": "[format('byokKey-{0}', parameters('orgs')[copyIndex()])]",
+        "secret": true,
+        "value": "[parameters('orgKeys')[parameters('orgs')[copyIndex()]]]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('deployAppGateway')]",
+      "type": "Microsoft.ApiManagement/service/namedValues",
+      "apiVersion": "2023-05-01-preview",
+      "name": "[format('{0}/{1}', parameters('apimName'), 'appGwSecret')]",
+      "properties": {
+        "displayName": "appGwSecret",
+        "secret": true,
+        "value": "[parameters('appGwSharedSecret')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]"
+      ]
+    },
+    {
+      "copy": {
+        "name": "orgApis",
+        "count": "[length(parameters('orgs'))]"
+      },
+      "type": "Microsoft.ApiManagement/service/apis",
+      "apiVersion": "2023-05-01-preview",
+      "name": "[format('{0}/{1}', parameters('apimName'), format('byok-{0}', parameters('orgs')[copyIndex()]))]",
+      "properties": {
+        "displayName": "[format('BYOK Foundry Proxy - {0}', parameters('orgs')[copyIndex()])]",
+        "path": "[format('byok/{0}', parameters('orgs')[copyIndex()])]",
+        "protocols": [
+          "https"
+        ],
+        "subscriptionRequired": false,
+        "format": "openapi+json",
+        "value": "[variables('openApiSpec')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]"
+      ]
+    },
+    {
+      "copy": {
+        "name": "orgApiPolicies",
+        "count": "[length(parameters('orgs'))]"
+      },
+      "type": "Microsoft.ApiManagement/service/apis/policies",
+      "apiVersion": "2023-05-01-preview",
+      "name": "[format('{0}/{1}/{2}', parameters('apimName'), format('byok-{0}', parameters('orgs')[copyIndex()]), 'policy')]",
+      "properties": {
+        "format": "xml",
+        "value": "[replace(replace(replace(replace(replace(replace(replace(variables('policyTemplate'), '__APPGW_GUARD__', variables('appGwGuardXml')), '__BACKEND_ID__', if(contains(parameters('mcOrgs'), parameters('orgs')[copyIndex()]), variables('mcBackendId'), if(contains(parameters('cohereOrgs'), parameters('orgs')[copyIndex()]), variables('cohereBackendId'), variables('backendId')))), '__ORG_KEY_NV__', format('{{{{byokKey-{0}}}}}', parameters('orgs')[copyIndex()])), '__ORG_SLUG__', parameters('orgs')[copyIndex()]), '__RATE_CALLS__', string(parameters('perOrgRateLimitCalls'))), '__RATE_PERIOD__', string(parameters('perOrgRateLimitRenewalPeriod'))), '__ALLOWED_MODELS_CSV__', if(contains(parameters('orgModels'), parameters('orgs')[copyIndex()]), join(parameters('orgModels')[parameters('orgs')[copyIndex()]], ','), ''))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ApiManagement/service/namedValues', parameters('apimName'), 'appGwSecret')]",
+        "[resourceId('Microsoft.ApiManagement/service/backends', parameters('apimName'), variables('cohereBackendId'))]",
+        "[resourceId('Microsoft.ApiManagement/service/backends', parameters('apimName'), variables('backendId'))]",
+        "[resourceId('Microsoft.ApiManagement/service/backends', parameters('apimName'), variables('backendId'))]",
+        "foundryPoolMembers",
+        "[resourceId('Microsoft.ApiManagement/service/backends', parameters('apimName'), variables('mcBackendId'))]",
+        "[resourceId('Microsoft.ApiManagement/service/apis', parameters('apimName'), format('byok-{0}', parameters('orgs')[copyIndex()]))]",
+        "orgKeyNamedValues"
+      ]
+    },
+    {
+      "copy": {
+        "name": "orgListModelsPolicies",
+        "count": "[length(parameters('orgs'))]"
+      },
+      "type": "Microsoft.ApiManagement/service/apis/operations/policies",
+      "apiVersion": "2023-05-01-preview",
+      "name": "[format('{0}/{1}/{2}/{3}', parameters('apimName'), format('byok-{0}', parameters('orgs')[copyIndex()]), 'listModels', 'policy')]",
+      "properties": {
+        "format": "xml",
+        "value": "[replace(if(contains(parameters('mcOrgs'), parameters('orgs')[copyIndex()]), variables('mcStaticModelsXml'), if(contains(parameters('cohereOrgs'), parameters('orgs')[copyIndex()]), variables('cohereStaticModelsXml'), variables('modelsPolicyXml'))), '__ALLOWED_MODELS_CSV__', if(contains(parameters('orgModels'), parameters('orgs')[copyIndex()]), join(parameters('orgModels')[parameters('orgs')[copyIndex()]], ','), ''))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ApiManagement/service/backends', parameters('apimName'), variables('backendId'))]",
+        "[resourceId('Microsoft.ApiManagement/service/namedValues', parameters('apimName'), 'foundryDeploymentsUrl')]",
+        "[resourceId('Microsoft.ApiManagement/service/namedValues', parameters('apimName'), 'foundryProjectDeploymentsUrl')]",
+        "orgApiPolicies",
+        "[resourceId('Microsoft.ApiManagement/service/apis', parameters('apimName'), format('byok-{0}', parameters('orgs')[copyIndex()]))]",
+        "orgKeyNamedValues"
+      ]
+    },
+    {
+      "copy": {
+        "name": "orgChatCompletionsPolicies",
+        "count": "[length(parameters('orgs'))]"
+      },
+      "type": "Microsoft.ApiManagement/service/apis/operations/policies",
+      "apiVersion": "2023-05-01-preview",
+      "name": "[format('{0}/{1}/{2}/{3}', parameters('apimName'), format('byok-{0}', parameters('orgs')[copyIndex()]), 'createChatCompletion', 'policy')]",
+      "properties": {
+        "format": "xml",
+        "value": "[replace(replace(replace(replace(variables('chatCompletionsPolicyXml'), '__AI_CONTENT_SAFETY__', variables('orgContentSafetyXml')[copyIndex()]), '__AI_CACHE_LOOKUP__', variables('orgCacheLookupXml')[copyIndex()]), '__AI_TOKEN_GOVERNANCE__', variables('orgTokenGovernanceXml')[copyIndex()]), '__AI_CACHE_STORE__', variables('orgCacheStoreXml')[copyIndex()])]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ApiManagement/service/caches', parameters('apimName'), 'default')]",
+        "[resourceId('Microsoft.ApiManagement/service/backends', parameters('apimName'), variables('contentSafetyBackendId'))]",
+        "[resourceId('Microsoft.ApiManagement/service/backends', parameters('apimName'), variables('embeddingsBackendId'))]",
+        "orgApiPolicies",
+        "[resourceId('Microsoft.ApiManagement/service/apis', parameters('apimName'), format('byok-{0}', parameters('orgs')[copyIndex()]))]"
+      ]
+    },
+    {
+      "copy": {
+        "name": "orgResponsesPolicies",
+        "count": "[length(parameters('orgs'))]"
+      },
+      "type": "Microsoft.ApiManagement/service/apis/operations/policies",
+      "apiVersion": "2023-05-01-preview",
+      "name": "[format('{0}/{1}/{2}/{3}', parameters('apimName'), format('byok-{0}', parameters('orgs')[copyIndex()]), 'createResponse', 'policy')]",
+      "properties": {
+        "format": "xml",
+        "value": "[replace(variables('responsesPolicyXml'), '__AI_GOVERNANCE__', variables('orgAiGovernanceXml')[copyIndex()])]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ApiManagement/service/backends', parameters('apimName'), variables('contentSafetyBackendId'))]",
+        "orgApiPolicies",
+        "[resourceId('Microsoft.ApiManagement/service/apis', parameters('apimName'), format('byok-{0}', parameters('orgs')[copyIndex()]))]"
+      ]
+    },
+    {
+      "condition": "[parameters('deployObservability')]",
+      "type": "Microsoft.ApiManagement/service/loggers",
+      "apiVersion": "2023-05-01-preview",
+      "name": "[format('{0}/{1}', parameters('apimName'), 'appinsights')]",
+      "properties": {
+        "loggerType": "applicationInsights",
+        "description": "Application Insights logger for BYOK LLM token metrics.",
+        "resourceId": "[reference(resourceId('Microsoft.Resources/deployments', 'observability'), '2025-04-01').outputs.appInsightsId.value]",
+        "credentials": {
+          "connectionString": "[reference(resourceId('Microsoft.Resources/deployments', 'observability'), '2025-04-01').outputs.appInsightsConnectionString.value]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]",
+        "[resourceId('Microsoft.Resources/deployments', 'observability')]"
+      ]
+    },
+    {
+      "condition": "[parameters('deployObservability')]",
+      "type": "Microsoft.ApiManagement/service/diagnostics",
+      "apiVersion": "2023-05-01-preview",
+      "name": "[format('{0}/{1}', parameters('apimName'), 'applicationinsights')]",
+      "properties": {
+        "loggerId": "[resourceId('Microsoft.ApiManagement/service/loggers', parameters('apimName'), 'appinsights')]",
+        "alwaysLog": "allErrors",
+        "metrics": true,
+        "sampling": {
+          "samplingType": "fixed",
+          "percentage": 100
+        },
+        "verbosity": "information",
+        "frontend": {
+          "request": {
+            "body": {
+              "bytes": 0
+            }
+          },
+          "response": {
+            "body": {
+              "bytes": 0
+            }
+          }
+        },
+        "backend": {
+          "request": {
+            "body": {
+              "bytes": 0
+            }
+          },
+          "response": {
+            "body": {
+              "bytes": 0
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]",
+        "[resourceId('Microsoft.ApiManagement/service/loggers', parameters('apimName'), 'appinsights')]"
+      ]
+    },
+    {
+      "condition": "[variables('useContentSafety')]",
+      "type": "Microsoft.ApiManagement/service/backends",
+      "apiVersion": "2023-05-01-preview",
+      "name": "[format('{0}/{1}', parameters('apimName'), variables('contentSafetyBackendId'))]",
+      "properties": {
+        "title": "Azure AI Content Safety",
+        "description": "Content Safety endpoint called by the llm-content-safety policy with the APIM managed identity.",
+        "protocol": "http",
+        "url": "[if(parameters('deployContentSafety'), reference(resourceId('Microsoft.Resources/deployments', 'contentSafety'), '2025-04-01').outputs.endpoint.value, parameters('contentSafetyEndpoint'))]",
+        "credentials": {
+          "managedIdentity": {
+            "resource": "https://cognitiveservices.azure.com"
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]",
+        "[resourceId('Microsoft.Resources/deployments', 'contentSafety')]"
+      ]
+    },
+    {
+      "condition": "[variables('useSemanticCache')]",
+      "type": "Microsoft.Cache/redisEnterprise",
+      "apiVersion": "2024-10-01",
+      "name": "[if(empty(parameters('redisCacheName')), format('{0}-redis', parameters('apimName')), parameters('redisCacheName'))]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "[parameters('redisSku')]"
+      },
+      "tags": "[parameters('tags')]"
+    },
+    {
+      "condition": "[variables('useSemanticCache')]",
+      "type": "Microsoft.Cache/redisEnterprise/databases",
+      "apiVersion": "2024-10-01",
+      "name": "[format('{0}/{1}', if(empty(parameters('redisCacheName')), format('{0}-redis', parameters('apimName')), parameters('redisCacheName')), 'default')]",
+      "properties": {
+        "clientProtocol": "Encrypted",
+        "port": 10000,
+        "clusteringPolicy": "EnterpriseCluster",
+        "evictionPolicy": "NoEviction",
+        "modules": [
+          {
+            "name": "RediSearch"
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Cache/redisEnterprise', if(empty(parameters('redisCacheName')), format('{0}-redis', parameters('apimName')), parameters('redisCacheName')))]"
+      ]
+    },
+    {
+      "condition": "[variables('useSemanticCache')]",
+      "type": "Microsoft.ApiManagement/service/caches",
+      "apiVersion": "2023-05-01-preview",
+      "name": "[format('{0}/{1}', parameters('apimName'), 'default')]",
+      "properties": {
+        "description": "Azure Managed Redis (RediSearch) semantic cache",
+        "connectionString": "[format('{0}:10000,password={1},ssl=True,abortConnect=False', reference(resourceId('Microsoft.Cache/redisEnterprise', if(empty(parameters('redisCacheName')), format('{0}-redis', parameters('apimName')), parameters('redisCacheName'))), '2024-10-01').hostName, listKeys(resourceId('Microsoft.Cache/redisEnterprise/databases', if(empty(parameters('redisCacheName')), format('{0}-redis', parameters('apimName')), parameters('redisCacheName')), 'default'), '2024-10-01').primaryKey)]",
+        "useFromLocation": "default"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]",
+        "[resourceId('Microsoft.Cache/redisEnterprise/databases', if(empty(parameters('redisCacheName')), format('{0}-redis', parameters('apimName')), parameters('redisCacheName')), 'default')]",
+        "[resourceId('Microsoft.Cache/redisEnterprise', if(empty(parameters('redisCacheName')), format('{0}-redis', parameters('apimName')), parameters('redisCacheName')))]"
+      ]
+    },
+    {
+      "condition": "[variables('useSemanticCache')]",
+      "type": "Microsoft.ApiManagement/service/backends",
+      "apiVersion": "2023-05-01-preview",
+      "name": "[format('{0}/{1}', parameters('apimName'), variables('embeddingsBackendId'))]",
+      "properties": {
+        "title": "Azure OpenAI embeddings",
+        "description": "Embeddings deployment used to vectorize prompts for semantic cache lookup.",
+        "protocol": "http",
+        "url": "[format('{0}/openai/deployments/{1}/embeddings', variables('normalizedFoundryBackendBaseUrl'), parameters('embeddingsDeploymentName'))]",
+        "resourceId": "[format('{0}subscriptions/{1}/resourceGroups/{2}/providers/Microsoft.CognitiveServices/accounts/{3}', environment().resourceManager, parameters('foundryAccountSubscriptionId'), parameters('foundryAccountResourceGroup'), parameters('foundryAccountName'))]",
+        "credentials": {
+          "managedIdentity": {
+            "resource": "https://cognitiveservices.azure.com"
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]"
+      ]
+    },
+    {
+      "copy": {
+        "name": "foundryAccess",
+        "count": "[length(variables('foundryRbacTargets'))]"
+      },
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('foundryAccess-{0}', copyIndex())]",
+      "subscriptionId": "[variables('foundryRbacTargets')[copyIndex()].subscriptionId]",
+      "resourceGroup": "[variables('foundryRbacTargets')[copyIndex()].resourceGroup]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "foundryAccountName": {
+            "value": "[variables('foundryRbacTargets')[copyIndex()].accountName]"
+          },
+          "apimPrincipalId": {
+            "value": "[reference(resourceId('Microsoft.ApiManagement/service', parameters('apimName')), '2023-05-01-preview', 'full').identity.principalId]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "593340396403243737"
+            }
+          },
+          "parameters": {
+            "foundryAccountName": {
+              "type": "string",
+              "metadata": {
+                "description": "Microsoft Foundry / Azure OpenAI account name."
+              }
+            },
+            "apimPrincipalId": {
+              "type": "string",
+              "metadata": {
+                "description": "Principal ID for the APIM managed identity."
+              }
+            },
+            "roleDefinitionId": {
+              "type": "string",
+              "defaultValue": "53ca6127-db72-4b80-b1b0-d745d6d5456d",
+              "metadata": {
+                "description": "Built-in role definition ID for Foundry data-plane access. Default is Foundry User."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryAccountName'))]",
+              "name": "[guid(resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryAccountName')), parameters('apimPrincipalId'), 'foundry-user')]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', parameters('roleDefinitionId'))]",
+                "principalId": "[parameters('apimPrincipalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('deployObservability')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "observability",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "logAnalyticsWorkspaceId": {
+            "value": "[parameters('logAnalyticsWorkspaceId')]"
+          },
+          "logAnalyticsWorkspaceName": "[if(empty(parameters('logAnalyticsWorkspaceName')), createObject('value', format('{0}-logs', parameters('apimName'))), createObject('value', parameters('logAnalyticsWorkspaceName')))]",
+          "appInsightsName": "[if(empty(parameters('appInsightsName')), createObject('value', format('{0}-ai', parameters('apimName'))), createObject('value', parameters('appInsightsName')))]",
+          "apimPrincipalId": {
+            "value": "[reference(resourceId('Microsoft.ApiManagement/service', parameters('apimName')), '2023-05-01-preview', 'full').identity.principalId]"
+          },
+          "grantMetricsPublisher": {
+            "value": "[parameters('grantMetricsPublisherRole')]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "16945444683608749666"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region for the observability resources."
+              }
+            },
+            "logAnalyticsWorkspaceId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Existing Log Analytics workspace resource id to reuse. When empty, a new workspace is created."
+              }
+            },
+            "logAnalyticsWorkspaceName": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Name for the Log Analytics workspace created when no existing workspace id is supplied."
+              }
+            },
+            "appInsightsName": {
+              "type": "string",
+              "metadata": {
+                "description": "Application Insights resource name."
+              }
+            },
+            "apimPrincipalId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "APIM system-assigned managed identity principal id. Granted Monitoring Metrics Publisher when grantMetricsPublisher is true."
+              }
+            },
+            "grantMetricsPublisher": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "Grant the APIM managed identity Monitoring Metrics Publisher on the Application Insights resource so it can emit custom token metrics."
+              }
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Optional tags applied to deployed resources."
+              }
+            }
+          },
+          "variables": {
+            "createWorkspace": "[empty(parameters('logAnalyticsWorkspaceId'))]",
+            "monitoringMetricsPublisherRoleId": "3913510d-42f4-4751-bf13-2c14e6f13a70"
+          },
+          "resources": [
+            {
+              "condition": "[variables('createWorkspace')]",
+              "type": "Microsoft.OperationalInsights/workspaces",
+              "apiVersion": "2023-09-01",
+              "name": "[parameters('logAnalyticsWorkspaceName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "sku": {
+                  "name": "PerGB2018"
+                },
+                "retentionInDays": 30
+              }
+            },
+            {
+              "type": "Microsoft.Insights/components",
+              "apiVersion": "2020-02-02",
+              "name": "[parameters('appInsightsName')]",
+              "location": "[parameters('location')]",
+              "kind": "web",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "Application_Type": "web",
+                "WorkspaceResourceId": "[if(variables('createWorkspace'), resourceId('Microsoft.OperationalInsights/workspaces', parameters('logAnalyticsWorkspaceName')), parameters('logAnalyticsWorkspaceId'))]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('logAnalyticsWorkspaceName'))]"
+              ]
+            },
+            {
+              "condition": "[and(parameters('grantMetricsPublisher'), not(empty(parameters('apimPrincipalId'))))]",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Insights/components', parameters('appInsightsName'))]",
+              "name": "[guid(resourceId('Microsoft.Insights/components', parameters('appInsightsName')), parameters('apimPrincipalId'), variables('monitoringMetricsPublisherRoleId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('monitoringMetricsPublisherRoleId'))]",
+                "principalId": "[parameters('apimPrincipalId')]",
+                "principalType": "ServicePrincipal"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Insights/components', parameters('appInsightsName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "appInsightsId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Insights/components', parameters('appInsightsName'))]"
+            },
+            "appInsightsName": {
+              "type": "string",
+              "value": "[parameters('appInsightsName')]"
+            },
+            "appInsightsConnectionString": {
+              "type": "string",
+              "metadata": {
+                "description": "Application Insights connection string used to configure the APIM logger."
+              },
+              "value": "[reference(resourceId('Microsoft.Insights/components', parameters('appInsightsName')), '2020-02-02').ConnectionString]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('deployContentSafety')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "contentSafety",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "contentSafetyName": "[if(empty(parameters('contentSafetyName')), createObject('value', format('{0}-cs', parameters('apimName'))), createObject('value', parameters('contentSafetyName')))]",
+          "apimPrincipalId": {
+            "value": "[reference(resourceId('Microsoft.ApiManagement/service', parameters('apimName')), '2023-05-01-preview', 'full').identity.principalId]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "8058337997477351971"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region for the Content Safety resource."
+              }
+            },
+            "contentSafetyName": {
+              "type": "string",
+              "metadata": {
+                "description": "Content Safety (Cognitive Services) account name."
+              }
+            },
+            "apimPrincipalId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "APIM system-assigned managed identity principal id. Granted Cognitive Services User so the llm-content-safety policy can call the resource with a managed-identity token."
+              }
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Optional tags applied to the resource."
+              }
+            }
+          },
+          "variables": {
+            "cognitiveServicesUserRoleId": "a97b65f3-24c7-4388-baec-2e87135dc908"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.CognitiveServices/accounts",
+              "apiVersion": "2023-05-01",
+              "name": "[parameters('contentSafetyName')]",
+              "location": "[parameters('location')]",
+              "kind": "ContentSafety",
+              "sku": {
+                "name": "S0"
+              },
+              "tags": "[parameters('tags')]",
+              "identity": {
+                "type": "None"
+              },
+              "properties": {
+                "publicNetworkAccess": "Enabled",
+                "customSubDomainName": "[toLower(parameters('contentSafetyName'))]"
+              }
+            },
+            {
+              "condition": "[not(empty(parameters('apimPrincipalId')))]",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.CognitiveServices/accounts', parameters('contentSafetyName'))]",
+              "name": "[guid(resourceId('Microsoft.CognitiveServices/accounts', parameters('contentSafetyName')), parameters('apimPrincipalId'), variables('cognitiveServicesUserRoleId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('cognitiveServicesUserRoleId'))]",
+                "principalId": "[parameters('apimPrincipalId')]",
+                "principalType": "ServicePrincipal"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.CognitiveServices/accounts', parameters('contentSafetyName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "endpoint": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.CognitiveServices/accounts', parameters('contentSafetyName')), '2023-05-01').endpoint]"
+            },
+            "id": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.CognitiveServices/accounts', parameters('contentSafetyName'))]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('deployAppGateway')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "appGateway",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "appGwName": {
+            "value": "[parameters('appGwName')]"
+          },
+          "apimGatewayHost": {
+            "value": "[format('{0}.azure-api.net', parameters('apimName'))]"
+          },
+          "sharedSecret": {
+            "value": "[parameters('appGwSharedSecret')]"
+          },
+          "wafMode": {
+            "value": "[parameters('appGwWafMode')]"
+          },
+          "capacity": {
+            "value": "[parameters('appGwCapacity')]"
+          },
+          "enableHttps": {
+            "value": "[parameters('appGwEnableHttps')]"
+          },
+          "httpsPfxBase64": {
+            "value": "[parameters('appGwHttpsPfxBase64')]"
+          },
+          "httpsPfxPassword": {
+            "value": "[parameters('appGwHttpsPfxPassword')]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "16770453487983408468"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "defaultValue": "[resourceGroup().location]",
+              "metadata": {
+                "description": "Azure region for the App Gateway and its network."
+              }
+            },
+            "appGwName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the Application Gateway."
+              }
+            },
+            "vnetName": {
+              "type": "string",
+              "defaultValue": "[format('{0}-vnet', parameters('appGwName'))]",
+              "metadata": {
+                "description": "Name of the VNet created for the Application Gateway."
+              }
+            },
+            "vnetAddressPrefix": {
+              "type": "string",
+              "defaultValue": "10.50.0.0/16",
+              "metadata": {
+                "description": "Address space for the App Gateway VNet."
+              }
+            },
+            "subnetName": {
+              "type": "string",
+              "defaultValue": "appgw-subnet",
+              "metadata": {
+                "description": "Name of the dedicated App Gateway subnet."
+              }
+            },
+            "subnetAddressPrefix": {
+              "type": "string",
+              "defaultValue": "10.50.0.0/24",
+              "metadata": {
+                "description": "Address prefix for the dedicated App Gateway subnet (v2 requires a subnet with no other resources, /24 recommended)."
+              }
+            },
+            "publicIpName": {
+              "type": "string",
+              "defaultValue": "[format('{0}-pip', parameters('appGwName'))]",
+              "metadata": {
+                "description": "Name of the public IP fronting the Application Gateway."
+              }
+            },
+            "apimGatewayHost": {
+              "type": "string",
+              "metadata": {
+                "description": "Public hostname of the APIM gateway, for example my-apim.azure-api.net. Used as the backend target and Host/SNI."
+              }
+            },
+            "sharedSecret": {
+              "type": "securestring",
+              "metadata": {
+                "description": "Shared secret injected as the X-AppGw-Secret header on every forwarded request. APIM validates it to block direct (bypass) callers."
+              }
+            },
+            "wafMode": {
+              "type": "string",
+              "defaultValue": "Detection",
+              "allowedValues": [
+                "Detection",
+                "Prevention"
+              ],
+              "metadata": {
+                "description": "WAF mode. Start in Detection for an LLM gateway to observe false positives on chat prompts before enforcing."
+              }
+            },
+            "capacity": {
+              "type": "int",
+              "defaultValue": 1,
+              "minValue": 1,
+              "metadata": {
+                "description": "Instance count for the Application Gateway."
+              }
+            },
+            "enableHttps": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "Enable an HTTPS listener on 443 (with HTTP->HTTPS redirect). Requires httpsPfxBase64 and httpsPfxPassword."
+              }
+            },
+            "httpsPfxBase64": {
+              "type": "securestring",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Base64-encoded PFX (full chain) for the HTTPS listener. Generate with [Convert]::ToBase64String([IO.File]::ReadAllBytes(pfxPath))."
+              }
+            },
+            "httpsPfxPassword": {
+              "type": "securestring",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Password protecting the PFX in httpsPfxBase64."
+              }
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Optional tags applied to deployed resources."
+              }
+            }
+          },
+          "variables": {
+            "appGwId": "[resourceId('Microsoft.Network/applicationGateways', parameters('appGwName'))]",
+            "frontendPortName": "port-80",
+            "frontendIpName": "appGwPublicFrontendIp",
+            "backendPoolName": "apim-backend",
+            "backendHttpSettingsName": "apim-https-settings",
+            "httpListenerName": "http-listener",
+            "probeName": "apim-status-probe",
+            "rewriteRuleSetName": "inject-appgw-secret",
+            "routingRuleName": "route-to-apim",
+            "httpsPortName": "port-443",
+            "httpsListenerName": "https-listener",
+            "sslCertName": "appgw-ssl-cert",
+            "redirectConfigName": "http-to-https",
+            "httpsRoutingRuleName": "route-to-apim-https",
+            "redirectRoutingRuleName": "redirect-http-to-https",
+            "frontendPortsAll": "[if(parameters('enableHttps'), createArray(createObject('name', variables('frontendPortName'), 'properties', createObject('port', 80)), createObject('name', variables('httpsPortName'), 'properties', createObject('port', 443))), createArray(createObject('name', variables('frontendPortName'), 'properties', createObject('port', 80))))]",
+            "sslCerts": "[if(parameters('enableHttps'), createArray(createObject('name', variables('sslCertName'), 'properties', createObject('data', parameters('httpsPfxBase64'), 'password', parameters('httpsPfxPassword')))), createArray())]",
+            "httpListenerObj": {
+              "name": "[variables('httpListenerName')]",
+              "properties": {
+                "frontendIPConfiguration": {
+                  "id": "[format('{0}/frontendIPConfigurations/{1}', variables('appGwId'), variables('frontendIpName'))]"
+                },
+                "frontendPort": {
+                  "id": "[format('{0}/frontendPorts/{1}', variables('appGwId'), variables('frontendPortName'))]"
+                },
+                "protocol": "Http"
+              }
+            },
+            "httpsListenerObj": {
+              "name": "[variables('httpsListenerName')]",
+              "properties": {
+                "frontendIPConfiguration": {
+                  "id": "[format('{0}/frontendIPConfigurations/{1}', variables('appGwId'), variables('frontendIpName'))]"
+                },
+                "frontendPort": {
+                  "id": "[format('{0}/frontendPorts/{1}', variables('appGwId'), variables('httpsPortName'))]"
+                },
+                "protocol": "Https",
+                "sslCertificate": {
+                  "id": "[format('{0}/sslCertificates/{1}', variables('appGwId'), variables('sslCertName'))]"
+                }
+              }
+            },
+            "listenersAll": "[if(parameters('enableHttps'), createArray(variables('httpListenerObj'), variables('httpsListenerObj')), createArray(variables('httpListenerObj')))]",
+            "redirectConfigs": "[if(parameters('enableHttps'), createArray(createObject('name', variables('redirectConfigName'), 'properties', createObject('redirectType', 'Permanent', 'targetListener', createObject('id', format('{0}/httpListeners/{1}', variables('appGwId'), variables('httpsListenerName'))), 'includePath', true(), 'includeQueryString', true()))), createArray())]",
+            "httpBackendRule": {
+              "name": "[variables('routingRuleName')]",
+              "properties": {
+                "ruleType": "Basic",
+                "priority": 100,
+                "httpListener": {
+                  "id": "[format('{0}/httpListeners/{1}', variables('appGwId'), variables('httpListenerName'))]"
+                },
+                "backendAddressPool": {
+                  "id": "[format('{0}/backendAddressPools/{1}', variables('appGwId'), variables('backendPoolName'))]"
+                },
+                "backendHttpSettings": {
+                  "id": "[format('{0}/backendHttpSettingsCollection/{1}', variables('appGwId'), variables('backendHttpSettingsName'))]"
+                },
+                "rewriteRuleSet": {
+                  "id": "[format('{0}/rewriteRuleSets/{1}', variables('appGwId'), variables('rewriteRuleSetName'))]"
+                }
+              }
+            },
+            "httpsBackendRule": {
+              "name": "[variables('httpsRoutingRuleName')]",
+              "properties": {
+                "ruleType": "Basic",
+                "priority": 100,
+                "httpListener": {
+                  "id": "[format('{0}/httpListeners/{1}', variables('appGwId'), variables('httpsListenerName'))]"
+                },
+                "backendAddressPool": {
+                  "id": "[format('{0}/backendAddressPools/{1}', variables('appGwId'), variables('backendPoolName'))]"
+                },
+                "backendHttpSettings": {
+                  "id": "[format('{0}/backendHttpSettingsCollection/{1}', variables('appGwId'), variables('backendHttpSettingsName'))]"
+                },
+                "rewriteRuleSet": {
+                  "id": "[format('{0}/rewriteRuleSets/{1}', variables('appGwId'), variables('rewriteRuleSetName'))]"
+                }
+              }
+            },
+            "redirectRule": {
+              "name": "[variables('redirectRoutingRuleName')]",
+              "properties": {
+                "ruleType": "Basic",
+                "priority": 110,
+                "httpListener": {
+                  "id": "[format('{0}/httpListeners/{1}', variables('appGwId'), variables('httpListenerName'))]"
+                },
+                "redirectConfiguration": {
+                  "id": "[format('{0}/redirectConfigurations/{1}', variables('appGwId'), variables('redirectConfigName'))]"
+                }
+              }
+            },
+            "routingRulesAll": "[if(parameters('enableHttps'), createArray(variables('httpsBackendRule'), variables('redirectRule')), createArray(variables('httpBackendRule')))]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Network/ApplicationGatewayWebApplicationFirewallPolicies",
+              "apiVersion": "2023-11-01",
+              "name": "[format('{0}-waf', parameters('appGwName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "policySettings": {
+                  "state": "Enabled",
+                  "mode": "[parameters('wafMode')]",
+                  "requestBodyCheck": true
+                },
+                "managedRules": {
+                  "managedRuleSets": [
+                    {
+                      "ruleSetType": "OWASP",
+                      "ruleSetVersion": "3.2"
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "type": "Microsoft.Network/publicIPAddresses",
+              "apiVersion": "2022-07-01",
+              "name": "[parameters('publicIpName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "Standard",
+                "tier": "Regional"
+              },
+              "properties": {
+                "publicIPAddressVersion": "IPv4",
+                "publicIPAllocationMethod": "Static"
+              }
+            },
+            {
+              "type": "Microsoft.Network/virtualNetworks",
+              "apiVersion": "2023-11-01",
+              "name": "[parameters('vnetName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "addressSpace": {
+                  "addressPrefixes": [
+                    "[parameters('vnetAddressPrefix')]"
+                  ]
+                },
+                "subnets": [
+                  {
+                    "name": "[parameters('subnetName')]",
+                    "properties": {
+                      "addressPrefix": "[parameters('subnetAddressPrefix')]"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "type": "Microsoft.Network/applicationGateways",
+              "apiVersion": "2023-11-01",
+              "name": "[parameters('appGwName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "sku": {
+                  "name": "WAF_v2",
+                  "tier": "WAF_v2",
+                  "capacity": "[parameters('capacity')]"
+                },
+                "gatewayIPConfigurations": [
+                  {
+                    "name": "appGwIpConfig",
+                    "properties": {
+                      "subnet": {
+                        "id": "[format('{0}/subnets/{1}', resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName')), parameters('subnetName'))]"
+                      }
+                    }
+                  }
+                ],
+                "frontendIPConfigurations": [
+                  {
+                    "name": "[variables('frontendIpName')]",
+                    "properties": {
+                      "publicIPAddress": {
+                        "id": "[resourceId('Microsoft.Network/publicIPAddresses', parameters('publicIpName'))]"
+                      }
+                    }
+                  }
+                ],
+                "frontendPorts": "[variables('frontendPortsAll')]",
+                "sslCertificates": "[variables('sslCerts')]",
+                "backendAddressPools": [
+                  {
+                    "name": "[variables('backendPoolName')]",
+                    "properties": {
+                      "backendAddresses": [
+                        {
+                          "fqdn": "[parameters('apimGatewayHost')]"
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "probes": [
+                  {
+                    "name": "[variables('probeName')]",
+                    "properties": {
+                      "protocol": "Https",
+                      "host": "[parameters('apimGatewayHost')]",
+                      "path": "/status-0123456789abcdef",
+                      "interval": 30,
+                      "timeout": 30,
+                      "unhealthyThreshold": 3,
+                      "pickHostNameFromBackendHttpSettings": false,
+                      "match": {
+                        "statusCodes": [
+                          "200-399"
+                        ]
+                      }
+                    }
+                  }
+                ],
+                "backendHttpSettingsCollection": [
+                  {
+                    "name": "[variables('backendHttpSettingsName')]",
+                    "properties": {
+                      "port": 443,
+                      "protocol": "Https",
+                      "cookieBasedAffinity": "Disabled",
+                      "pickHostNameFromBackendAddress": true,
+                      "requestTimeout": 120,
+                      "probe": {
+                        "id": "[format('{0}/probes/{1}', variables('appGwId'), variables('probeName'))]"
+                      }
+                    }
+                  }
+                ],
+                "httpListeners": "[variables('listenersAll')]",
+                "redirectConfigurations": "[variables('redirectConfigs')]",
+                "rewriteRuleSets": [
+                  {
+                    "name": "[variables('rewriteRuleSetName')]",
+                    "properties": {
+                      "rewriteRules": [
+                        {
+                          "name": "set-appgw-secret",
+                          "ruleSequence": 100,
+                          "actionSet": {
+                            "requestHeaderConfigurations": [
+                              {
+                                "headerName": "X-AppGw-Secret",
+                                "headerValue": "[parameters('sharedSecret')]"
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "requestRoutingRules": "[variables('routingRulesAll')]",
+                "firewallPolicy": {
+                  "id": "[resourceId('Microsoft.Network/ApplicationGatewayWebApplicationFirewallPolicies', format('{0}-waf', parameters('appGwName')))]"
+                },
+                "forceFirewallPolicyAssociation": true
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/publicIPAddresses', parameters('publicIpName'))]",
+                "[resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName'))]",
+                "[resourceId('Microsoft.Network/ApplicationGatewayWebApplicationFirewallPolicies', format('{0}-waf', parameters('appGwName')))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "publicIpAddress": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Network/publicIPAddresses', parameters('publicIpName')), '2022-07-01').ipAddress]"
+            },
+            "frontendUrl": {
+              "type": "string",
+              "value": "[format('http://{0}', reference(resourceId('Microsoft.Network/publicIPAddresses', parameters('publicIpName')), '2022-07-01').ipAddress)]"
+            },
+            "httpsEnabled": {
+              "type": "bool",
+              "value": "[parameters('enableHttps')]"
+            },
+            "appGatewayName": {
+              "type": "string",
+              "value": "[parameters('appGwName')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "apimGatewayUrl": {
+      "type": "string",
+      "value": "[format('https://{0}.azure-api.net', parameters('apimName'))]"
+    },
+    "orgProxyBasePaths": {
+      "type": "array",
+      "copy": {
+        "count": "[length(parameters('orgs'))]",
+        "input": {
+          "org": "[parameters('orgs')[copyIndex()]]",
+          "basePath": "[format('https://{0}.azure-api.net/byok/{1}', parameters('apimName'), parameters('orgs')[copyIndex()])]",
+          "modelsUrl": "[format('https://{0}.azure-api.net/byok/{1}/models', parameters('apimName'), parameters('orgs')[copyIndex()])]"
+        }
+      }
+    },
+    "backendCompletionUrl": {
+      "type": "string",
+      "value": "[format('{0}/openai/v1/chat/completions?api-version={1}', variables('normalizedFoundryBackendBaseUrl'), parameters('foundryApiVersion'))]"
+    },
+    "appGatewayPublicIp": {
+      "type": "string",
+      "value": "[if(parameters('deployAppGateway'), reference(resourceId('Microsoft.Resources/deployments', 'appGateway'), '2025-04-01').outputs.publicIpAddress.value, '')]"
+    },
+    "appGatewayFrontendUrl": {
+      "type": "string",
+      "value": "[if(parameters('deployAppGateway'), reference(resourceId('Microsoft.Resources/deployments', 'appGateway'), '2025-04-01').outputs.frontendUrl.value, '')]"
+    },
+    "applicationInsightsName": {
+      "type": "string",
+      "value": "[if(parameters('deployObservability'), reference(resourceId('Microsoft.Resources/deployments', 'observability'), '2025-04-01').outputs.appInsightsName.value, '')]"
+    }
+  }
+}

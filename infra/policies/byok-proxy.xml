@@ -1,0 +1,80 @@
+<policies>
+  <inbound>
+    <base />
+    __APPGW_GUARD__
+    <!--
+      Per-org auth. This policy is templated per organization at deploy time:
+        __ORG_KEY_NV__  -> {{byokKey-<org>}}  (that org's secret named value)
+        __ORG_SLUG__    -> <org>              (the org slug, used for attribution + throttling)
+        __RATE_CALLS__ / __RATE_PERIOD__ -> per-org rate-limit-by-key settings
+      The presented key is bound to THIS org's path: a key issued to another org
+      fails the comparison here and is rejected with 401, so callers cannot shift
+      cost by repointing at a different /byok/<org> URL.
+    -->
+    <set-variable name="presentedKey" value="@{
+        var auth = context.Request.Headers.GetValueOrDefault(&quot;Authorization&quot;, &quot;&quot;);
+        return auth.StartsWith(&quot;Bearer &quot;, StringComparison.OrdinalIgnoreCase)
+            ? auth.Substring(&quot;Bearer &quot;.Length).Trim()
+            : &quot;&quot;;
+    }" />
+    <choose>
+      <when condition="@(string.IsNullOrEmpty((string)context.Variables[&quot;presentedKey&quot;]) || (string)context.Variables[&quot;presentedKey&quot;] != &quot;__ORG_KEY_NV__&quot;)">
+        <return-response>
+          <set-status code="401" reason="Unauthorized" />
+          <set-header name="WWW-Authenticate" exists-action="override">
+            <value>Bearer error="invalid_token"</value>
+          </set-header>
+          <set-header name="Content-Type" exists-action="override">
+            <value>application/json</value>
+          </set-header>
+          <set-body>{"error":{"message":"Invalid or missing API key.","type":"invalid_request_error","code":"invalid_api_key"}}</set-body>
+        </return-response>
+      </when>
+    </choose>
+    <set-variable name="byokOrg" value="__ORG_SLUG__" />
+    <!-- Capture the requested model once (POST only) for reuse by the allowlist and token metrics. -->
+    <set-variable name="byokModel" value="@{
+        if (!context.Request.Method.Equals(&quot;POST&quot;, StringComparison.OrdinalIgnoreCase)) { return &quot;n/a&quot;; }
+        try { return (string)context.Request.Body.As&lt;JObject&gt;(preserveContent: true)[&quot;model&quot;] ?? &quot;unknown&quot;; } catch { return &quot;unknown&quot;; }
+    }" />
+    <!-- Per-org throttling. counter-key is the org slug, so limits are isolated per organization. -->
+    <rate-limit-by-key calls="__RATE_CALLS__" renewal-period="__RATE_PERIOD__" counter-key="@((string)context.Variables[&quot;byokOrg&quot;])" />
+    <!-- Attribution: surfaces the org as a dimension in API Inspector / Application Insights. -->
+    <trace source="byok" severity="information">
+      <message>@("byok org=" + (string)context.Variables["byokOrg"] + " op=" + context.Operation.Id)</message>
+      <metadata name="byokOrg" value="@((string)context.Variables[&quot;byokOrg&quot;])" />
+    </trace>
+    <!-- Per-org model allowlist. When __ALLOWED_MODELS_CSV__ is non-empty, POST requests
+         (chat/completions, responses) must name a permitted model or are rejected with 403.
+         Empty list = no restriction. GET /models carries no body and is skipped here; the
+         /models operation policy filters the advertised list to the same allowlist. -->
+    <choose>
+      <when condition="@{
+          var allow = new HashSet&lt;string&gt;(StringComparer.OrdinalIgnoreCase);
+          foreach (var a in &quot;__ALLOWED_MODELS_CSV__&quot;.Split(new char[]{','}, StringSplitOptions.RemoveEmptyEntries)) { var t = a.Trim(); if (t.Length &gt; 0) { allow.Add(t); } }
+          if (allow.Count == 0) { return false; }
+          if (context.Request.Method != &quot;POST&quot;) { return false; }
+          var model = (string)context.Variables[&quot;byokModel&quot;];
+          return string.IsNullOrEmpty(model) || !allow.Contains(model);
+      }">
+        <return-response>
+          <set-status code="403" reason="Forbidden" />
+          <set-header name="Content-Type" exists-action="override">
+            <value>application/json</value>
+          </set-header>
+          <set-body>{"error":{"message":"The requested model is not permitted for this organization.","type":"invalid_request_error","code":"model_not_allowed"}}</set-body>
+        </return-response>
+      </when>
+    </choose>
+    <set-backend-service backend-id="__BACKEND_ID__" />
+  </inbound>
+  <backend>
+    <base />
+  </backend>
+  <outbound>
+    <base />
+  </outbound>
+  <on-error>
+    <base />
+  </on-error>
+</policies>

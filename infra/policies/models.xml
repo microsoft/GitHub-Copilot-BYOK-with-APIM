@@ -1,0 +1,116 @@
+<policies>
+  <inbound>
+    <base />
+    <!-- Account-level (OpenAI-format) deployments. Reliable, cognitiveservices audience. -->
+    <send-request mode="new" response-variable-name="acctDeployments" timeout="20" ignore-error="true">
+      <set-url>{{foundryDeploymentsUrl}}</set-url>
+      <set-method>GET</set-method>
+      <authentication-managed-identity resource="https://cognitiveservices.azure.com" />
+    </send-request>
+    <!-- Project deployments (AI Foundry data plane). Adds managed-compute models that do not
+         appear in the account listing. Skipped when no project is configured. -->
+    <choose>
+      <when condition="@(!&quot;{{foundryProjectDeploymentsUrl}}&quot;.Equals(&quot;https://disabled.invalid&quot;, StringComparison.OrdinalIgnoreCase))">
+        <send-request mode="new" response-variable-name="projDeployments" timeout="20" ignore-error="true">
+          <set-url>{{foundryProjectDeploymentsUrl}}</set-url>
+          <set-method>GET</set-method>
+          <authentication-managed-identity resource="https://ai.azure.com" />
+        </send-request>
+      </when>
+    </choose>
+    <choose>
+      <when condition="@((context.Variables.ContainsKey(&quot;acctDeployments&quot;) &amp;&amp; ((IResponse)context.Variables[&quot;acctDeployments&quot;]).StatusCode == 200) || (context.Variables.ContainsKey(&quot;projDeployments&quot;) &amp;&amp; ((IResponse)context.Variables[&quot;projDeployments&quot;]).StatusCode == 200))">
+        <return-response>
+          <set-status code="200" reason="OK" />
+          <set-header name="Content-Type" exists-action="override">
+            <value>application/json</value>
+          </set-header>
+          <set-body><![CDATA[@{
+              var created = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+              var data = new JArray();
+              var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+              var allow = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+              foreach (var a in "__ALLOWED_MODELS_CSV__".Split(new char[]{','}, StringSplitOptions.RemoveEmptyEntries)) { var t = a.Trim(); if (t.Length > 0) { allow.Add(t); } }
+              if (context.Variables.ContainsKey("acctDeployments")) {
+                  var r = (IResponse)context.Variables["acctDeployments"];
+                  if (r.StatusCode == 200) {
+                      var arr = r.Body.As<JObject>(preserveContent: true)["data"] as JArray ?? new JArray();
+                      foreach (var d in arr) {
+                          var id = (string)d["id"];
+                          if (!string.IsNullOrWhiteSpace(id) && (allow.Count == 0 || allow.Contains(id)) && seen.Add(id)) {
+                              data.Add(new JObject {
+                                  ["id"] = id,
+                                  ["object"] = "model",
+                                  ["created"] = created,
+                                  ["owned_by"] = (string)(d["owned_by"] ?? d["owner"]) ?? "azure-openai"
+                              });
+                          }
+                      }
+                  }
+              }
+              if (context.Variables.ContainsKey("projDeployments")) {
+                  var r = (IResponse)context.Variables["projDeployments"];
+                  if (r.StatusCode == 200) {
+                      var arr = r.Body.As<JObject>(preserveContent: true)["value"] as JArray ?? new JArray();
+                      foreach (var d in arr) {
+                          var id = (string)d["name"];
+                          if (!string.IsNullOrWhiteSpace(id) && (allow.Count == 0 || allow.Contains(id)) && seen.Add(id)) {
+                              data.Add(new JObject {
+                                  ["id"] = id,
+                                  ["object"] = "model",
+                                  ["created"] = created,
+                                  ["owned_by"] = "azure-foundry"
+                              });
+                          }
+                      }
+                  }
+              }
+              foreach (var em in new string[] { __EXTRA_MODELS_JSON__ }) {
+                  if (!string.IsNullOrWhiteSpace(em) && (allow.Count == 0 || allow.Contains(em)) && seen.Add(em)) {
+                      data.Add(new JObject {
+                          ["id"] = em,
+                          ["object"] = "model",
+                          ["created"] = created,
+                          ["owned_by"] = "azure-ml"
+                      });
+                  }
+              }
+              return new JObject {
+                  ["object"] = "list",
+                  ["data"] = data
+              }.ToString();
+          }]]></set-body>
+        </return-response>
+      </when>
+      <otherwise>
+        <return-response>
+          <set-status code="502" reason="Bad Gateway" />
+          <set-header name="Content-Type" exists-action="override">
+            <value>application/json</value>
+          </set-header>
+          <set-body><![CDATA[@{
+              var status = context.Variables.ContainsKey("acctDeployments")
+                  ? ((IResponse)context.Variables["acctDeployments"]).StatusCode.ToString()
+                  : "no response";
+              return new JObject {
+                  ["error"] = new JObject {
+                      ["message"] = "Failed to list Foundry deployments (upstream status: " + status + ").",
+                      ["type"] = "api_error",
+                      ["code"] = "deployments_unavailable"
+                  }
+              }.ToString();
+          }]]></set-body>
+        </return-response>
+      </otherwise>
+    </choose>
+  </inbound>
+  <backend>
+    <base />
+  </backend>
+  <outbound>
+    <base />
+  </outbound>
+  <on-error>
+    <base />
+  </on-error>
+</policies>

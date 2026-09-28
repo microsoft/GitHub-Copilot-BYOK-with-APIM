@@ -1,0 +1,48 @@
+<policies>
+  <inbound>
+    <base />
+    <!--
+      Static /models response for orgs routed to a managed online endpoint (for example
+      Cohere), which does not expose a Foundry-style deployments listing. The advertised
+      model ids are injected at deploy time:
+        __MODELS_JSON__ -> comma-separated, quoted model id literals
+    -->
+    <return-response>
+      <set-status code="200" reason="OK" />
+      <set-header name="Content-Type" exists-action="override">
+        <value>application/json</value>
+      </set-header>
+      <set-body><![CDATA[@{
+          var created = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+          var allow = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+          foreach (var a in "__ALLOWED_MODELS_CSV__".Split(new char[]{','}, StringSplitOptions.RemoveEmptyEntries)) { var t = a.Trim(); if (t.Length > 0) { allow.Add(t); } }
+          var ids = new JArray(__MODELS_JSON__);
+          var data = new JArray();
+          foreach (var id in ids) {
+              var name = (string)id;
+              if (string.IsNullOrWhiteSpace(name)) { continue; }
+              if (allow.Count > 0 && !allow.Contains(name)) { continue; }
+              data.Add(new JObject {
+                  ["id"] = name,
+                  ["object"] = "model",
+                  ["created"] = created,
+                  ["owned_by"] = "cohere"
+              });
+          }
+          return new JObject {
+              ["object"] = "list",
+              ["data"] = data
+          }.ToString();
+      }]]></set-body>
+    </return-response>
+  </inbound>
+  <backend>
+    <base />
+  </backend>
+  <outbound>
+    <base />
+  </outbound>
+  <on-error>
+    <base />
+  </on-error>
+</policies>

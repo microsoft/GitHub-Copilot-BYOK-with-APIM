@@ -1,0 +1,57 @@
+<policies>
+  <inbound>
+    <base />
+    __AI_CONTENT_SAFETY__
+    __AI_CACHE_LOOKUP__
+    __AI_TOKEN_GOVERNANCE__
+    <set-body><![CDATA[@{
+        var body = context.Request.Body.As<JObject>(preserveContent: true);
+
+        var model = (string)body["model"];
+        var defaultTemperatureModels = new string[] { __DEFAULT_TEMPERATURE_MODELS_JSON__ };
+        var requiresDefaultTemperature = false;
+        foreach (var modelId in defaultTemperatureModels)
+        {
+          if (String.Equals(model, modelId, StringComparison.OrdinalIgnoreCase))
+          {
+            requiresDefaultTemperature = true;
+            break;
+          }
+        }
+
+        if (requiresDefaultTemperature && body["temperature"] != null)
+        {
+          body["temperature"] = 1;
+        }
+
+        var tools = body["tools"] as JArray;
+        if (tools != null)
+        {
+            foreach (var tool in tools)
+            {
+                var fn = tool?["function"] as JObject;
+                if (fn != null)
+                {
+                    var strictToken = fn["strict"];
+                    if (strictToken == null || strictToken.Type == JTokenType.Null)
+                    {
+                        fn["strict"] = false;
+                    }
+                }
+            }
+        }
+
+        return body.ToString();
+    }]]></set-body>
+  </inbound>
+  <backend>
+    <base />
+  </backend>
+  <outbound>
+    __AI_CACHE_STORE__
+    <base />
+  </outbound>
+  <on-error>
+    <base />
+  </on-error>
+</policies>
