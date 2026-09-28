@@ -1,0 +1,20 @@
+<!--
+  App Gateway front-door enforcement (injected only when the App Gateway feature is enabled).
+  App Gateway adds X-AppGw-Secret to every forwarded request via a rewrite rule set. Because
+  the rewrite SETS the header, any value a client tries to supply is overwritten at the gateway.
+  A caller hitting the public APIM hostname directly does not carry the secret and is rejected
+  with 403, so the WAF cannot be bypassed. __APPGW_IPFILTER__ is optionally replaced with an
+  ip-filter that additionally restricts inbound traffic to App Gateway's public IP.
+-->
+<choose>
+  <when condition="@(context.Request.Headers.GetValueOrDefault(&quot;X-AppGw-Secret&quot;, &quot;&quot;) != &quot;{{appGwSecret}}&quot;)">
+    <return-response>
+      <set-status code="403" reason="Forbidden" />
+      <set-header name="Content-Type" exists-action="override">
+        <value>application/json</value>
+      </set-header>
+      <set-body>{"error":{"message":"Direct access is not permitted; requests must traverse the gateway.","type":"invalid_request_error","code":"gateway_required"}}</set-body>
+    </return-response>
+  </when>
+</choose>
+__APPGW_IPFILTER__

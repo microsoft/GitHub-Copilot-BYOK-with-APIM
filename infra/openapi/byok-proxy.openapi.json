@@ -1,0 +1,161 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "BYOK Foundry Proxy",
+    "version": "1.0.0",
+    "description": "OpenAI-compatible proxy surface that APIM publishes to GHCP."
+  },
+  "paths": {
+    "/models": {
+      "get": {
+        "operationId": "listModels",
+        "summary": "List the models available through the proxy",
+        "description": "Returns the Foundry deployments on the backend account in OpenAI list-models format. The deployment id is the value clients pass as `model`.",
+        "responses": {
+          "200": {
+            "description": "An OpenAI-compatible list of available models",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "object": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "object": {
+                            "type": "string"
+                          },
+                          "created": {
+                            "type": "integer"
+                          },
+                          "owned_by": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chat/completions": {
+      "post": {
+        "operationId": "createChatCompletion",
+        "summary": "Proxy a chat completion request",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "messages": {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    }
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "temperature": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "messages"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A successful completion response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/responses": {
+      "post": {
+        "operationId": "createResponse",
+        "summary": "Proxy a Responses API request",
+        "description": "OpenAI Responses API — used by newer Copilot models instead of /chat/completions. The request body is forwarded as-is to the Foundry backend at /openai/v1/responses.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "description": "The Foundry deployment name to target."
+                  },
+                  "input": {
+                    "description": "Text prompt or array of input items.",
+                    "oneOf": [
+                      { "type": "string" },
+                      { "type": "array", "items": { "type": "object" } }
+                    ]
+                  },
+                  "instructions": {
+                    "type": "string",
+                    "description": "System-level instructions (equivalent to a system message)."
+                  },
+                  "tools": {
+                    "type": "array",
+                    "items": { "type": "object" }
+                  },
+                  "stream": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "model",
+                  "input"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A successful Responses API response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

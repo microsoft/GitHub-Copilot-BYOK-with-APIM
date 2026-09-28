@@ -1,0 +1,18 @@
+<policies>
+  <inbound>
+    <!-- Runs the API-level auth/attribution policy first (sets byokOrg + byokModel), then the
+         per-org AI governance block (token limits + token metrics). __AI_GOVERNANCE__ is
+         substituted per org at deploy time and is empty when no limits/metrics are configured. -->
+    <base />
+    __AI_GOVERNANCE__
+  </inbound>
+  <backend>
+    <base />
+  </backend>
+  <outbound>
+    <base />
+  </outbound>
+  <on-error>
+    <base />
+  </on-error>
+</policies>
