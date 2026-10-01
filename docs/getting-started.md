@@ -325,6 +325,7 @@ export COPILOT_PROVIDER_API_KEY=<client-key>
 export COPILOT_MODEL=<your-foundry-deployment-name>
 copilot
 ```
+### Most Enterprises will use this step :
 
 **GitHub.com (enterprise).** An enterprise owner registers each org's `<base-url>` under
 **AI controls → Copilot → Configure allowed models → Custom models** as an
