@@ -23,6 +23,7 @@ A reference implementation for serving your own Microsoft Foundry model to GitHu
   - [Useful docs](#useful-docs)
   - [Contributors](#contributors)
   - [Acknowledgements](#acknowledgements)
+  - [Code of conduct](#code-of-conduct)
   - [License](#license)
 
 ## Solution overview
@@ -201,6 +202,10 @@ For full details, see [Enabling custom models for GitHub Copilot in your organiz
 
 ## Acknowledgements
 [ghcp-byok-apim: A reference implementation for serving your own Microsoft Foundry model to GitHub Copilot, with Azure API Management providing centralized authentication, routing, and governance — built on Copilot's BYOK capability](https://github.com/Frank802/ghcp-byok-apim) by **Frank802**.
+
+## Code of conduct
+
+This project has adopted the [Microsoft Open Source Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
 MIT License. See [LICENSE](LICENSE.txt) for details.
