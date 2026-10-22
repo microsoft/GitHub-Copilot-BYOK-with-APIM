@@ -48,10 +48,11 @@ For optional features, register these providers with the same command:
 
 ## Step 1 — Collect your Foundry details
 
-Record the account name and resource group. The endpoint defaults to
-`https://<foundryAccountName>.openai.azure.com`. If **Keys and Endpoint** shows a different URL,
-use that as the `foundryBackendBaseUrl` override. For cross-subscription deployments, also record
-the Foundry subscription ID.
+Record the existing account's name, subscription ID, and resource group. Foundry can be in a
+different subscription from APIM; the template does not discover it across subscriptions.
+
+The endpoint defaults to `https://<foundryAccountName>.openai.azure.com`. If **Keys and Endpoint**
+shows a different URL, use that as the `foundryBackendBaseUrl` override.
 
 Also record the model's **deployment name**, not its base model name. Clients send this as `model`.
 
@@ -81,7 +82,7 @@ Copy the [example parameters](../infra/example.bicepparam):
 cp infra/example.bicepparam infra/my.bicepparam
 ```
 
-### Required: edit six settings
+### Required: edit seven settings
 
 Edit these entries in `infra/my.bicepparam`; do not copy every parameter from the template:
 
@@ -90,11 +91,17 @@ Edit these entries in `infra/my.bicepparam`; do not copy every parameter from th
 | `apimName` | Globally unique APIM instance name |
 | `apimPublisherEmail` | Contact email |
 | `foundryAccountName` | Existing Foundry account name |
+| `foundryAccountSubscriptionId` | Subscription ID containing the existing Foundry account, even if different from APIM's subscription |
 | `foundryAccountResourceGroup` | Foundry resource group |
 | `orgKeys` | Organization slug to client key; slugs use lowercase letters, numbers, and hyphens |
 | `appGwSharedSecret` | Separate gateway secret from Step 2 |
 
 Leave `deployAppGateway = true` in the starter file. The template also defaults to `true`.
+
+Set `foundryAccountSubscriptionId` explicitly, even when Foundry and APIM share a subscription.
+It scopes the backend resource ID and the APIM identity's role assignment; it is not inferred
+from the account name or endpoint. If omitted outside the starter, it defaults to the APIM
+deployment subscription.
 
 ### Inferred: leave these alone unless needed
 
@@ -103,14 +110,12 @@ Leave `deployAppGateway = true` in the starter file. The template also defaults 
 | `orgs` | Organization slugs from `orgKeys` |
 | `appGwName` | `<apimName>-appgw` |
 | `foundryBackendBaseUrl` | `https://<foundryAccountName>.openai.azure.com` |
-| `foundryAccountSubscriptionId` | Selected deployment subscription |
 | `appGwEnableHttps` | Enabled when `appGwHttpsPfxBase64` is supplied |
 
 ### Optional: add only what you need
 
 | Parameter | Purpose |
 | --- | --- |
-| `foundryAccountSubscriptionId` | Set when Foundry is in a different subscription |
 | `apimSkuName` / `apimSkuCapacity` | APIM tier and units; defaults to `Developer` / `1` for testing |
 | `orgModels` | Per-org model allowlists; omitted orgs or empty arrays are unrestricted |
 | `perOrgRateLimitCalls` / `perOrgRateLimitRenewalPeriod` | Request limit per org; defaults to 300 calls per 60 seconds |
@@ -124,8 +129,9 @@ uses `/openai/v1`. For AI feature examples, use the [AI Gateway guide](ai-gatewa
 
 **Existing parameter files override defaults.** If upgrading from an older example, change
 `deployAppGateway = false` to `true` and remove an explicit `appGwEnableHttps = false` when adding
-your certificate. Preserve existing custom names and endpoints. Deployments that previously omitted
-`deployAppGateway` will now add it; set `false` explicitly only if you intend to run APIM without WAF.
+your certificate. Preserve existing custom names, endpoints, and Foundry subscription and resource-group
+settings. Deployments that previously omitted `deployAppGateway` will now add it; set `false` explicitly
+only if you intend to run APIM without WAF.
 
 **Do not commit secrets.** `infra/my.bicepparam` is ignored by Git. Protect any copies, keys,
 passwords, PFX files, and base64-encoded certificate data.

@@ -4,6 +4,7 @@
 ## Get latest from https://github.com/github/gitignore/blob/main/VisualStudio.gitignore
 
 /infra/my.bicepparam
+/infra/*.bak
 
 # User-specific files
 *.rsuser

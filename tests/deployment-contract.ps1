@@ -49,7 +49,9 @@ try {
     }
     Assert-Equal $parameters.deployAppGateway.defaultValue $true 'Application Gateway must be the template default.'
     Assert-Equal $starter.parameters.deployAppGateway.value $true 'The starter must explicitly include Application Gateway.'
-    Assert-Equal @($starter.parameters.PSObject.Properties).Count 7 'The starter must contain only six inputs and the gateway flag.'
+    Assert-Equal @($starter.parameters.PSObject.Properties).Count 8 'The starter must contain only seven inputs and the gateway flag.'
+    Assert-Equal $starter.parameters.foundryAccountSubscriptionId.value '<foundry-subscription-id>' 'The starter must explicitly include the Foundry subscription ID.'
+    Assert-Equal $parameters.foundryAccountSubscriptionId.defaultValue '[subscription().subscriptionId]' 'The template must retain its same-subscription default for compatibility.'
     Assert-Equal $parameters.appGwName.defaultValue "[format('{0}-appgw', parameters('apimName'))]" 'Gateway naming must derive from APIM.'
     Assert-Equal $parameters.foundryBackendBaseUrl.defaultValue "[format('https://{0}.openai.azure.com', parameters('foundryAccountName'))]" 'The standard Foundry endpoint must be inferred.'
     Assert-Equal $parameters.orgs.defaultValue "[objectKeys(parameters('orgKeys'))]" 'Organization slugs must derive from the key map.'

@@ -61,7 +61,7 @@ on every backing account, including accounts in other subscriptions.
 | Parameter | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `foundryAccountName` | string | Required | Existing Foundry / Azure OpenAI account name. |
-| `foundryAccountSubscriptionId` | string | `subscription().subscriptionId` | Subscription containing the account. Override for cross-subscription access. |
+| `foundryAccountSubscriptionId` | string | `subscription().subscriptionId` | Subscription containing the account. Set explicitly in the starter. If omitted, defaults to the APIM deployment subscription; other subscriptions are not searched. |
 | `foundryAccountResourceGroup` | string | `resourceGroup().name` | Resource group containing the account. Override when different from the gateway group. |
 | `foundryBackendBaseUrl` | string | `'https://${foundryAccountName}.openai.azure.com'` | Standard Azure OpenAI endpoint; override for a different account endpoint. Must not be empty. |
 | `foundryBackends` | array | `[]` | Optional load-balanced backend pool; see the member schema below. |

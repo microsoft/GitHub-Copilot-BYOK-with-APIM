@@ -68,7 +68,7 @@ completions still use GitHub-hosted models.
 1. **Prepare a model.** Use an existing Foundry account with a deployment that meets the
    [model requirements](#model-requirements) below.
 2. **Deploy the gateway.** Follow [Getting started](docs/getting-started.md) for prerequisites,
-   six starter settings and verification. Application Gateway is now enabled by default and
+   seven starter settings and verification. Application Gateway is now enabled by default and
    incurs Azure charges; APIM-only deployments must explicitly set `deployAppGateway = false`.
    [Configure DNS and a TLS certificate](docs/getting-started.md#production-enable-https-on-the-app-gateway)
    before connecting Copilot; supplying the PFX enables HTTPS automatically.
