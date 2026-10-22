@@ -1,194 +1,118 @@
 # Getting started
 
-This guide walks you through standing up the BYOK proxy end to end: provisioning the
-APIM gateway in front of your Microsoft Foundry deployment, then pointing a Copilot BYOK
-surface at it. The gateway is **multi-tenant by organization** — each org slug you list
-gets its own path, key, and policy on one shared APIM instance. For background on how the
-pieces fit together, see the [reference architecture](reference-architecture.md).
+Deploy an HTTPS gateway for your existing Microsoft Foundry models, then connect GitHub Copilot.
+Each GitHub organization gets its own `/byok/<org>` path, key, and policy on one shared gateway.
+For the design, see the [reference architecture](reference-architecture.md).
 
-## What you'll end up with
-
-- An APIM gateway, fronted by an **Application Gateway (WAF_v2)**, that publishes an
-  OpenAI-compatible endpoint per org. Clients point at the gateway front door,
-  `https://<gateway-host>/byok/<org>`; the APIM FQDN is the backend only and rejects direct
-  hits with `403`.
-- A `/byok/<org>/chat/completions` operation (and `/responses`) that routes to your Foundry
-  deployment using the gateway's managed identity — no Foundry keys on clients.
-- A `/byok/<org>/models` operation that lists your real Foundry deployments in OpenAI
-  list-models format, so Copilot's model picker only shows what you've deployed.
-- One secret client key **per org** (the `byokKey-<org>` named values), each presented by
-  that org's callers as a bearer token and validated against that org's path in policy.
+Commands use Bash unless labeled PowerShell. Replace angle-bracketed placeholders with your values.
 
 ## Prerequisites
 
-Before you deploy, make sure you have:
+- An Azure subscription and permission to create resources and assign roles. You need
+  `Microsoft.Authorization/roleAssignments/write` on the Foundry account, even if it is in
+  another subscription.
+- An existing Foundry / Azure OpenAI account with a model deployment supporting **tool calling**
+  and **streaming**. A context window of at least **128k tokens** is recommended.
+- [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli), Git, and OpenSSL.
+  Azure CLI installs Bicep tooling on first use.
+- A hostname you control and a publicly trusted TLS certificate; see [Enable HTTPS](#production-enable-https-on-the-app-gateway).
+- A Copilot client: VS Code, Copilot CLI, or enterprise BYOK on GitHub.com.
 
-- **An Azure subscription** with permission to create resources and assign roles
-  (you need `Microsoft.Authorization/roleAssignments/write`, e.g. **Owner** or
-  **User Access Administrator**, because the deployment grants the gateway a role on
-  Foundry).
-- **An existing Microsoft Foundry / Azure OpenAI resource** with a model deployment.
-  The proxy does **not** create the Foundry resource — it points at one you already have.
-- **A model that meets the Copilot BYOK requirements:** tool calling (function calling),
-  streaming, and ideally a context window of **≥128k tokens**. Copilot CLI errors out on
-  models that lack tool calling or streaming.
-- **The [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli)** (with the
-  Bicep tooling, which `az` installs on first use), signed in via `az login`.
-- **A Copilot BYOK surface** to test with: VS Code, the Copilot CLI, or enterprise BYOK
-  on GitHub.com.
+Sign in and select the subscription that will host the gateway:
+
+```bash
+az login
+az account set --subscription <target-subscription-id>
+```
 
 ### Register the Azure resource providers
 
-Register the resource providers used by the template in the **target subscription** where APIM
-and the optional Application Gateway will be deployed. Provider registration is per subscription.
-The existing Foundry resource is a prerequisite, so its subscription's provider setup is outside
-this deployment.
+Register the providers for APIM and Application Gateway in the selected subscription:
 
-| When required | Resource provider |
+```bash
+az provider register --namespace Microsoft.ApiManagement --wait
+az provider register --namespace Microsoft.Network --wait
+```
+
+For optional features, register these providers with the same command:
+
+| Feature | Resource providers |
 | --- | --- |
-| Every deployment | `Microsoft.ApiManagement` |
 | `deployObservability = true` | `Microsoft.OperationalInsights`, `Microsoft.Insights` |
-| `deployAppGateway = true` | `Microsoft.Network` |
 | `deployContentSafety = true` | `Microsoft.CognitiveServices` |
 | `deploySemanticCache = true` | `Microsoft.Cache` |
 
-Register the core provider before deploying:
-
-**PowerShell:**
-
-```powershell
-# Existing Azure subscription that will receive the gateway resources
-$TARGET_SUBSCRIPTION_ID = '<target-subscription-id>'
-
-az provider register --subscription $TARGET_SUBSCRIPTION_ID --namespace Microsoft.ApiManagement --wait
-```
-
-Register only the providers for the optional features you enable. For example, observability
-requires:
-
-```powershell
-foreach ($provider in @('Microsoft.OperationalInsights', 'Microsoft.Insights')) {
-  az provider register --subscription $TARGET_SUBSCRIPTION_ID --namespace $provider --wait
-}
-```
-
-**Bash:**
-
-```bash
-TARGET_SUBSCRIPTION_ID=<target-subscription-id>
-
-az provider register \
-  --subscription "$TARGET_SUBSCRIPTION_ID" \
-  --namespace Microsoft.ApiManagement \
-  --wait
-
-for provider in Microsoft.OperationalInsights Microsoft.Insights; do
-  az provider register \
-    --subscription "$TARGET_SUBSCRIPTION_ID" \
-    --namespace "$provider" \
-    --wait
-done
-```
-
-Azure normally registers the platform providers used for deployments and role assignments
-(`Microsoft.Resources` and `Microsoft.Authorization`). Your deploying identity still needs
-`Microsoft.Authorization/roleAssignments/write` on the existing Foundry resource, including
-when Foundry is in another subscription. `Microsoft.AlertsManagement` is not used by this
-template; register it separately only if you later enable an Application Insights alert that
-requires it.
-
-> **Note:** APIM provisioning can take a while to finish (the **Developer** and
-> **Premium** tiers in particular can take 30–45 minutes for the gateway to come online).
-> Plan for that on the first deployment.
-
 ## Step 1 — Collect your Foundry details
 
-From the Foundry / Azure OpenAI resource you'll be fronting, note:
+Record the account name, subscription ID, resource group, and endpoint base URL
+(under **Keys and Endpoint**), for example `https://contoso-foundry.openai.azure.com`.
 
-| Value | Where to find it | Example |
-| --- | --- | --- |
-| Account name | Resource overview | `contoso-foundry` |
-| Resource group | Resource overview | `rg-ai` |
-| Endpoint base URL | Resource **Keys and Endpoint** | `https://contoso-foundry.openai.azure.com` |
-| Deployment name | **Model deployments** blade | `gpt-4o` |
+Also record the model's **deployment name**, not its base model name. Clients send this as `model`.
 
-The **deployment name** (not the base model name) is what clients will pass as `model`.
-
-## Step 2 — Clone the repo and pick per-org keys
+## Step 2 — Clone the repo and generate keys
 
 ```bash
-git clone https://github.com/jasonmoodie/ghcp-byok-per-org-gateway.git
-cd ghcp-byok-per-org-gateway
+git clone https://github.com/microsoft/GitHub-Copilot-BYOK-with-APIM.git
+cd GitHub-Copilot-BYOK-with-APIM
 ```
 
-Decide which organizations get access. Generate one **strong, unique client key per org**,
-plus a separate shared secret for Application Gateway when `deployAppGateway = true`. For a
-single-org deployment with Application Gateway, run this command twice:
+Generate one unique client key per organization and one separate Application Gateway secret.
+Run this once for each value:
 
 ```bash
-# Run once per org. Store each result under that org's slug in `orgKeys`.
-openssl rand -hex 32
-
-# Run once more. Store this different result in `appGwSharedSecret`.
 openssl rand -hex 32
 ```
 
-For multiple orgs, run the first command once per org and the second command only once. Store
-the values in `infra/my.bicepparam`, replacing the placeholders as shown below:
+Store the client keys in `orgKeys` and the gateway secret in `appGwSharedSecret` in the next step.
+Never reuse a client key as the gateway secret.
 
-```bicep
-param orgKeys = {
-  'your-github-org': '<first-generated-value>'
-}
+## Step 3 — Set deployment parameters
 
-param deployAppGateway = true
-param appGwSharedSecret = '<second-generated-value>'
-```
-
-Each org key is a client-facing API key. `appGwSharedSecret` is an internal secret used only
-between Application Gateway and APIM. Keep all values secret and do not reuse an org key as
-the Application Gateway shared secret.
-
-## Step 3 — Fill in the deployment parameters
-
-Copy the example parameter file and edit it with your values:
+Copy the [example parameters](../infra/example.bicepparam):
 
 ```bash
 cp infra/example.bicepparam infra/my.bicepparam
 ```
 
-Then set each parameter in `infra/my.bicepparam`:
+Edit the existing entries in `infra/my.bicepparam`:
 
-| Parameter | What to set it to |
+| Parameter | Value |
 | --- | --- |
-| `apimName` | A globally unique name for the new APIM instance |
-| `apimPublisherName` | Your team or org name (shown in the APIM portal) |
-| `apimPublisherEmail` | A contact email for APIM notifications |
-| `apimSkuName` / `apimSkuCapacity` | APIM tier and units (`Developer` is fine for testing) |
-| `foundryAccountName` | Foundry account name from Step 1 |
-| `foundryAccountSubscriptionId` | Subscription ID that holds the Foundry account. Omit it when Foundry and APIM use the same subscription |
-| `foundryAccountResourceGroup` | Resource group that holds the Foundry account |
-| `foundryBackendBaseUrl` | Foundry endpoint base URL from Step 1 |
-| `foundryApiVersion` | Azure OpenAI API version to send to the backend |
-| `foundryDeploymentsApiVersion` | Data-plane version used to list deployments for `/models` |
-| `foundryProjectName` | Optional. Foundry project name. Set it to also list the project's **managed-compute** deployments in `/models` (standard account deployments are listed either way) |
-| `foundryProjectDeploymentsApiVersion` | Optional. API version for the project deployments listing (default `2025-05-01`) |
-| `extraModelIds` | Optional. Manual list of model ids to force into `/models`, for anything the live queries don't return |
-| `orgs` | Array of org slugs (lowercase letters, numbers, hyphens) — one path per org |
-| `orgKeys` | Object keyed by org slug → that org's secret key from Step 2 |
-| `deployAppGateway` | Set to `true` to deploy Application Gateway (WAF_v2) in front of APIM |
-| `appGwSharedSecret` | The separate Application Gateway shared secret generated in Step 2; required when `deployAppGateway = true` |
-| `orgModels` | Optional. Object keyed by org slug → array of model ids that org may see and call. A listed org's `/models` is filtered to these ids and any chat/responses request for another model is rejected with `403`. Orgs omitted (or mapped to `[]`) are unrestricted |
-| `defaultTemperatureModelIds` | Optional. Model deployment ids that only accept the default Chat Completions temperature. APIM rewrites client-supplied temperatures to `1` for these models |
-| `perOrgRateLimitCalls` / `perOrgRateLimitRenewalPeriod` | Optional per-org throttle (calls per period) |
+| `apimName` | Globally unique APIM instance name |
+| `apimPublisherName` / `apimPublisherEmail` | Organization name and contact email |
+| `apimSkuName` / `apimSkuCapacity` | Tier and units; `Developer` is suitable for testing |
+| `foundryAccountName` | Existing Foundry account name |
+| `foundryAccountSubscriptionId` | Foundry subscription ID; omit to use the selected subscription |
+| `foundryAccountResourceGroup` | Foundry resource group |
+| `foundryBackendBaseUrl` | Endpoint base URL from Step 1 |
+| `orgs` | Organization slugs using lowercase letters, numbers, and hyphens |
+| `orgKeys` | Map of each slug to its client key |
+| `deployAppGateway` | `true` for the gateway path in this guide; defaults to `false` |
+| `appGwName` | Application Gateway name |
+| `appGwSharedSecret` | Separate gateway secret from Step 2 |
 
-> **Don't commit secrets.** The `orgKeys` values and `appGwSharedSecret` are secrets. Keep your filled-in
-> `*.bicepparam` out of source control, or pass the keys at deploy time / from Key Vault
-> instead of storing them in the file.
+Replace sample organizations in **all** per-org maps, including optional overrides.
+Leave `appGwEnableHttps = false` until the certificate is ready.
+
+Optional settings:
+
+| Parameter | Purpose |
+| --- | --- |
+| `orgModels` | Per-org model allowlists; omitted orgs or empty arrays are unrestricted |
+| `perOrgRateLimitCalls` / `perOrgRateLimitRenewalPeriod` | Request limit per org; defaults to 300 calls per 60 seconds |
+| `foundryProjectName` | Include the project's managed-compute deployments in `/models` |
+| `extraModelIds` | Manually add callable deployments missing from discovery |
+| `defaultTemperatureModelIds` | Normalize Chat Completions temperature to `1` for models that require it |
+
+Keep the API-version defaults (`foundryApiVersion`, `foundryDeploymentsApiVersion`, and
+`foundryProjectDeploymentsApiVersion`) unless your backend requires different versions.
+
+**Do not commit secrets.** `infra/my.bicepparam` is ignored by Git. Protect any copies, keys,
+passwords, PFX files, and base64-encoded certificate data.
 
 ## Step 4 — Deploy
 
-Create (or reuse) a resource group for the gateway, then deploy the template:
+Create or reuse a resource group, then deploy:
 
 ```bash
 az group create --name <resource-group> --location <azure-region>
@@ -199,11 +123,11 @@ az deployment group create \
   --parameters infra/my.bicepparam
 ```
 
-The deployment provisions the APIM instance, imports a proxy API per org, applies the
-per-org policies, and grants APIM's system-assigned managed identity the **`Foundry User`**
-role on your Foundry account.
+This creates APIM, Application Gateway, and the per-org APIs and policies. It grants APIM's
+managed identity the **Foundry User** role on your Foundry account. APIM provisioning can take
+30–45 minutes.
 
-When it finishes, read the outputs — they give you the per-org URLs you'll need next:
+Read the deployment outputs:
 
 ```bash
 az deployment group show \
@@ -214,45 +138,31 @@ az deployment group show \
 
 | Output | Use |
 | --- | --- |
-| `apimGatewayUrl` | APIM base URL — the App Gateway backend (not the client-facing host) |
-| `appGatewayPublicIp` | The App Gateway's static public IP — create your DNS `A` record against this |
-| `appGatewayFrontendUrl` | The gateway's **lab HTTP** address (`http://<public-ip>`). Not the production host — see *Enable HTTPS* below |
-| `orgProxyBasePaths` | Array of `{ org, basePath, modelsUrl }`. These are built on the **APIM host**; when the App Gateway guard is on, calling them directly returns `403` — point clients at your gateway hostname instead (see below) |
-| `backendCompletionUrl` | The Foundry backend URL the gateway routes to (for reference) |
+| `appGatewayPublicIp` | IP for your DNS `A` record |
+| `appGatewayFrontendUrl` | Initial HTTP address, not the HTTPS client URL |
+| `apimGatewayUrl` / `orgProxyBasePaths` | APIM backend URLs; direct requests without the gateway secret return `403` |
+| `backendCompletionUrl` | Foundry backend URL for reference |
 
-> When the App Gateway guard is active, calling the APIM FQDN directly returns `403`. During
-> initial lab testing (HTTPS not yet enabled) reach the proxy through the HTTP front door
-> `appGatewayFrontendUrl`; for real Copilot use you must enable HTTPS (next) and point clients
-> at your own domain, because Copilot BYOK requires HTTPS.
+Complete HTTPS setup before sending keys or connecting Copilot. WAF starts in **Detection**
+mode: it records matches but does not block requests. See [WAF tuning](traffic-flow.md#where-the-waf-is)
+before enabling Prevention.
 
 ## (Production) Enable HTTPS on the App Gateway
 
-Copilot BYOK requires HTTPS, so a production front door needs a TLS certificate on a hostname
-you control. The template ships the 443 listener and the HTTP→HTTPS redirect; you supply the
-domain and certificate. Do this **after** the first deploy, which creates the public IP:
+Copilot BYOK requires HTTPS. After the first deployment:
 
-1. **Read the public IP** from the deployment outputs:
-
-   ```powershell
-   az deployment group show -g <resource-group> -n main `
-     --query properties.outputs.appGatewayPublicIp.value -o tsv
-   ```
-
-2. **Create a DNS `A` record** at your DNS provider pointing your hostname at that IP — for
-   example `copilot.example.com → <appGatewayPublicIp>`. Confirm it resolves
-   (`nslookup copilot.example.com`).
-
-3. **Issue a publicly-trusted certificate** for that hostname. A free 90-day Let's Encrypt cert
-   via Posh-ACME (DNS-01) works well; export it as a full-chain PFX with a password.
-
-4. **Base64-encode the PFX** for the params file:
+1. **Configure DNS.** Create an `A` record pointing your hostname at `appGatewayPublicIp`.
+   Confirm it resolves, for example with `nslookup copilot.example.com`.
+2. **Obtain a certificate.** Issue a publicly trusted certificate for that hostname, such as
+   Let's Encrypt using Posh-ACME with DNS-01. Export a password-protected, full-chain PFX.
+3. **Base64-encode the PFX** using PowerShell:
 
    ```powershell
    $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes('fullchain.pfx'))
    $b64 | Set-Content pfx.b64.txt
    ```
 
-5. **Set the HTTPS parameters** in `infra/my.bicepparam`:
+4. **Update** `infra/my.bicepparam`:
 
    ```bicep
    param appGwEnableHttps = true
@@ -260,36 +170,27 @@ domain and certificate. Do this **after** the first deploy, which creates the pu
    param appGwHttpsPfxPassword = '<the PFX password>'
    ```
 
-6. **Redeploy** with the same command as Step 4. Port 443 now terminates TLS and port 80
-   permanently redirects to HTTPS.
+5. **Redeploy** using the Step 4 command. Port 443 now terminates TLS; port 80 redirects to HTTPS.
 
-7. **Point clients at your hostname** — not at the `orgProxyBasePaths` or `appGatewayFrontendUrl`
-   outputs (those use the APIM host or the lab HTTP IP):
-
-   ```text
-   https://copilot.example.com/byok/<org>
-   ```
-
-The certificate lives in the deployment, so renewal is a manual re-issue + redeploy (~every 90
-days for Let's Encrypt). Keep the PFX base64, its password, the org keys, and `appGwSharedSecret`
-out of source control.
+Use `https://<gateway-host>/byok/<org>` as the client base URL, not the APIM or HTTP output URLs.
+Renew and redeploy the certificate before it expires; renewal is manual unless automated.
 
 ## Step 5 — Verify the proxy
 
-Pick one org's `basePath` from `orgProxyBasePaths` as `<base-url>` and that org's key as
-`<client-key>`.
+Use `https://<gateway-host>/byok/<org>` as `<base-url>` and the matching organization's key as
+`<client-key>`. Run both checks over HTTPS.
 
-**List models** — confirms managed-identity auth and the `/models` operation:
+**List models:**
 
 ```bash
 curl "<base-url>/models" \
   -H "Authorization: Bearer <client-key>"
 ```
 
-You should get an OpenAI-style `{ "object": "list", "data": [ ... ] }` response containing
-your Foundry deployment(s). Each `id` is a value you can pass as `model`.
+Expect `{ "object": "list", "data": [ ... ] }` containing your deployments, filtered by any
+`orgModels` allowlist. Each `id` is a value clients can send as `model`.
 
-**Send a chat completion** — confirms end-to-end routing to Foundry:
+**Send a chat completion:**
 
 ```bash
 curl "<base-url>/chat/completions" \
@@ -301,62 +202,39 @@ curl "<base-url>/chat/completions" \
       }'
 ```
 
-A `401` means the bearer token didn't match that org's `byokKey-<org>` (check you're using
-the key that matches the path). A `5xx` usually points at the backend URL, deployment name,
-or the role assignment not having propagated yet — wait a minute and retry.
+Expect a completion containing an assistant message. For errors, use the table below.
 
-## Step 6 — Point a Copilot surface at it
+## Step 6 — Connect Copilot
 
-For each org, the **API key is that org's key** and the **model is your Foundry deployment
-name**. The gateway adds the backend token and `api-version`. Use that org's `<base-url>`.
+Use the same HTTPS base URL, organization key, and Foundry deployment name:
 
-**VS Code (individual).** Chat view → model picker → **Manage Language Models** →
-**Add Models** → **Custom Endpoint**. Set the base URL to `<base-url>`, the API key to that
-org's key, and the model to your deployment name. Select **Responses** as the API type for
-models that combine reasoning with function tools; select Chat Completions only when the model
-supports that combination. The older OpenAI Compatible provider is deprecated.
-
-**Copilot CLI (individual).**
-
-```bash
-export COPILOT_PROVIDER_TYPE=openai
-export COPILOT_PROVIDER_BASE_URL=<base-url>
-export COPILOT_PROVIDER_API_KEY=<client-key>
-export COPILOT_MODEL=<your-foundry-deployment-name>
-copilot
-```
-### Most Enterprises will use this step :
-
-**GitHub.com (enterprise).** An enterprise owner registers each org's `<base-url>` under
-**AI controls → Copilot → Configure allowed models → Custom models** as an
-**OpenAI-compatible provider** with that org's key, then sets **Access → Choose per
-organization** to the matching org. The models then surface on GitHub.com, the CLI, and
-IDEs for that org only.
-
-Full per-surface steps — including the org-scoping detail and policy toggles — are in
-[client-surfaces.md](client-surfaces.md).
+| Client | Setup |
+| --- | --- |
+| VS Code | [Custom Endpoint](client-surfaces.md#vs-code); choose the API type your model supports |
+| Copilot CLI | [OpenAI provider](client-surfaces.md#copilot-cli) (`openai`, not `azure`) |
+| Enterprise BYOK | [OpenAI-compatible provider](../README.md#configure-enterprise-byok); scope access to the matching organization |
 
 ## Troubleshooting
 
-| Symptom | Likely cause | Fix |
-| --- | --- | --- |
-| `401 invalid_api_key` | Bearer token doesn't match that org's `byokKey-<org>` | Confirm the key matches the `/byok/<org>` path the client points at; redeploy if you rotated it |
-| `5xx` on chat, `/models` works | Backend URL or deployment name wrong, or role not yet propagated | Verify `foundryBackendBaseUrl` + the `model` you send; wait for the role assignment to propagate |
-| `/models` returns an empty list | Wrong `foundryDeploymentsApiVersion`, or no deployments on the account | Confirm the account has deployments; adjust the data-plane API version |
-| A managed-compute model is missing from `/models` | `foundryProjectName` not set, so only the account listing is queried | Set `foundryProjectName` to the project that holds the managed-compute deployment (or add its name to `extraModelIds`) |
-| `429 Too Many Requests` from APIM | That org hit its `perOrgRateLimitCalls` | Raise the per-org limit or spread load |
-| `403 model_not_allowed` on chat/responses | The `model` isn't in that org's `orgModels` allowlist | Add the id to `orgModels[<org>]` (and redeploy), or send an allowed model — check `/byok/<org>/models` for the permitted list |
-| Copilot CLI errors on the model | Model lacks tool calling or streaming | Use a deployment that supports both (see [model requirements](../README.md#model-requirements)) |
-| `400` says function tools with `reasoning_effort` are unsupported on `/v1/chat/completions` | VS Code configured a reasoning model with the Chat Completions API | Reconfigure the model as a **Custom Endpoint** with API type **Responses** and URL `<base-url>/responses` |
-| `400` says `temperature` only supports the default value `1` | The client sent a sampling temperature the model does not support | Add the deployment id to `defaultTemperatureModelIds` and redeploy so APIM normalizes it to `1` |
-| Copilot uses `azure` and hits `/openai/deployments/...` | Wrong provider type | Use the `openai` provider type targeting `/byok/<org>`, not `azure` |
-| Deploy fails: `The 'JObject' start tag ... does not match the end tag of 'set-body'` | A policy has a C# expression with generics (e.g. `As<JObject>`); APIM's XML parser reads `<JObject>` as a tag | Wrap the expression body in `<![CDATA[ ... ]]>` inside `<set-body>` (see `infra/policies/models.xml` for the pattern) |
+| Symptom | Check or fix |
+| --- | --- |
+| `403 gateway_required` | Use the gateway's HTTPS hostname, not APIM. If already using it, check the gateway secret |
+| `401 invalid_api_key` | Match the client key to the `/byok/<org>` path; redeploy after key rotation |
+| Chat returns `5xx`, but `/models` works | Check `foundryBackendBaseUrl` and the deployment name; allow time for the role assignment to propagate |
+| `/models` is empty | Check the account's deployments, API version, and `orgModels` allowlist |
+| Managed-compute model missing | Set `foundryProjectName`, or add its deployment name to `extraModelIds` |
+| `429 Too Many Requests` | Check per-org request or token rate limits; reduce traffic or adjust limits |
+| `403 model_not_allowed` | Use an allowed deployment from `/models`, or update `orgModels` and redeploy |
+| Copilot CLI rejects the model | Confirm [tool calling and streaming support](../README.md#model-requirements) |
+| `400` mentions function tools with `reasoning_effort` | Configure VS Code's Custom Endpoint for **Responses**, with URL `<base-url>/responses` |
+| `400` says temperature must be `1` | Add the deployment ID to `defaultTemperatureModelIds` and redeploy |
+| Client calls `/openai/deployments/...` | Change provider type from `azure` to `openai` |
+
+For DNS, TLS, WAF, and gateway errors, see [traffic-flow troubleshooting](traffic-flow.md#common-failure-points).
 
 ## Next steps
 
-- Turn on the optional **AI Gateway capabilities** — per-org token limits/quotas, token
-  metrics and the telemetry dashboard, content safety, semantic caching, and a resilient
-  multi-Foundry pool — with the [enable-and-use runbook](ai-gateway.md). All are off by default.
-- Review the [per-organization multi-tenant BYOK](reference-architecture.md#per-organization-multi-tenant-byok)
-  design, including GitHub-side org scoping and the teams-inside-one-org limitation.
-- Review the full per-surface configuration in [client-surfaces.md](client-surfaces.md).
+- [Enable AI Gateway capabilities](ai-gateway.md): token governance, metrics, content safety,
+  caching, and backend resilience.
+- [Review the organization boundary](reference-architecture.md#per-organization-multi-tenant-byok):
+  access is per organization, not per user or team.
