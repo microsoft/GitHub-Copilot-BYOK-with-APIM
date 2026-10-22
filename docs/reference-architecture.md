@@ -227,15 +227,15 @@ keeps it working in subscriptions whose policy forces Key Vaults to private-only
 Both certificate values are required. An explicit `appGwEnableHttps = false` overrides inference;
 remove it when upgrading an older parameter file.
 
-A free 90-day Let's Encrypt cert works well here. Issue it once with Posh-ACME (DNS-01), export
-the full-chain PFX, then base64-encode it into the params file:
+For a free Let's Encrypt certificate, follow the [Windows/Posh-ACME guide](lets-encrypt.md).
+It uses DNS-01 validation and generates the full-chain PFX to base64-encode into the params file:
 
 ```powershell
 $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes('fullchain.pfx'))
 ```
 
-Because the PFX lives in the deployment rather than Key Vault, renewal is a manual re-issue +
-redeploy every ~90 days. For hands-off rotation, front the gateway with a Key Vault reference and
+Because the PFX lives in the deployment rather than Key Vault, renew the certificate and redeploy
+before it expires. For hands-off rotation, front the gateway with a Key Vault reference and
 Acmebot instead (requires DNS the ACME client can automate and a Key Vault the gateway identity
 can reach).
 
