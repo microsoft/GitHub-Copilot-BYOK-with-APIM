@@ -67,8 +67,9 @@ An explicit `orgs` array can still select a subset of the organizations in `orgK
 
 ### Keep secrets explicit and report configuration errors
 
-- Generate a distinct client key per organization and a separate gateway secret using
-  `openssl rand -hex 32`. Preserve them across redeployments unless intentionally rotating them.
+- Generate a distinct client key per organization and a separate gateway secret using the
+  [OpenSSL or PowerShell commands](../getting-started.md#step-2--clone-the-repo-and-generate-keys).
+  Preserve them across redeployments unless intentionally rotating them.
 - Require a gateway secret of at least 32 characters when Application Gateway is enabled.
 - Require Application Gateway and both PFX values when HTTPS is enabled.
 - Do not generate or rotate secrets automatically.
