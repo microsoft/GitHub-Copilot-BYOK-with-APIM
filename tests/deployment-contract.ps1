@@ -7,6 +7,8 @@ $root = Split-Path -Parent $PSScriptRoot
 $scratch = Join-Path ([IO.Path]::GetTempPath()) ('byok-deployment-tests-' + [guid]::NewGuid())
 $templatePath = Join-Path $scratch 'main.json'
 $parametersPath = Join-Path $scratch 'starter.parameters.json'
+$overridesSourcePath = Join-Path $root ('infra\.validation-overrides-' + [guid]::NewGuid() + '.bicepparam')
+$overridesPath = Join-Path $scratch 'overrides.parameters.json'
 $script:checks = 0
 
 function Assert-Equal {
@@ -29,10 +31,22 @@ try {
         throw 'Starter parameter compilation failed.'
     }
 
+    $starterSource = Get-Content -Raw -LiteralPath (Join-Path $root 'infra\example.bicepparam')
+    $withOverrides = [regex]::Replace($starterSource, '(?m)^// (?=param |[ \t]|[}\]])', '')
+    [IO.File]::WriteAllText($overridesSourcePath, $withOverrides)
+    & bicep build-params $overridesSourcePath --outfile $overridesPath
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Commented starter override examples failed to compile.'
+    }
+
     $template = Get-Content -Raw -LiteralPath $templatePath | ConvertFrom-Json
     $starter = Get-Content -Raw -LiteralPath $parametersPath | ConvertFrom-Json
+    $overrides = Get-Content -Raw -LiteralPath $overridesPath | ConvertFrom-Json
     $parameters = $template.parameters
 
+    foreach ($name in @('apimSkuName', 'orgModels', 'foundryProjectName')) {
+        Assert-Equal ($overrides.parameters.PSObject.Properties.Name -contains $name) $true "Commented example was not validated: $name."
+    }
     Assert-Equal $parameters.deployAppGateway.defaultValue $true 'Application Gateway must be the template default.'
     Assert-Equal $starter.parameters.deployAppGateway.value $true 'The starter must explicitly include Application Gateway.'
     Assert-Equal @($starter.parameters.PSObject.Properties).Count 7 'The starter must contain only six inputs and the gateway flag.'
@@ -72,10 +86,34 @@ try {
     Assert-Equal $summary.httpsEnabled "[variables('appGwHttpsReady')]" 'The summary must report validated HTTPS enablement.'
     Assert-Equal (($summary.PSObject.Properties.Name | Sort-Object) -join ',') 'applicationGatewayEnabled,applicationGatewayId,applicationGatewayName,httpsEnabled,organizations,wafMode' 'The summary must contain only deployment status, names, and resource IDs.'
 
+    $source = Get-Content -Raw -LiteralPath (Join-Path $root 'infra\main.bicep')
+    $reference = Get-Content -Raw -LiteralPath (Join-Path $root 'docs\parameters.md')
+    $declarations = @{}
+    foreach ($declaration in [regex]::Matches($source, '(?m)^param (?<name>\w+) \w+(?: = (?<default>[^\r\n]+))?\r?$')) {
+        $declarations[$declaration.Groups['name'].Value] = if ($declaration.Groups['default'].Success) {
+            $declaration.Groups['default'].Value.Trim()
+        } else {
+            'Required'
+        }
+    }
+    $documented = @{}
+    foreach ($row in [regex]::Matches($reference, '(?m)^\| `(?<name>\w+)` \| (?<type>[^|]+) \| (?<default>[^|]+) \|')) {
+        $name = $row.Groups['name'].Value
+        Assert-Equal $documented.ContainsKey($name) $false "$name must appear only once in the parameter reference."
+        Assert-Equal $declarations.ContainsKey($name) $true "Unknown parameter in reference: $name."
+        $expectedType = $parameters.$name.type -replace 'secureObject', 'secure object' -replace 'secureString', 'secure string'
+        Assert-Equal $row.Groups['type'].Value.Trim() $expectedType "$name has an incorrect documented type."
+        Assert-Equal $row.Groups['default'].Value.Trim().Trim('`') $declarations[$name] "$name has an incorrect documented default."
+        $documented[$name] = $true
+    }
+    foreach ($name in $declarations.Keys) {
+        Assert-Equal $documented.ContainsKey($name) $true "Parameter is missing from the reference: $name."
+    }
+
     Write-Output "PASS: $script:checks offline deployment-contract checks. No Azure resources were accessed."
 }
 finally {
-    foreach ($path in @($templatePath, $parametersPath)) {
+    foreach ($path in @($templatePath, $parametersPath, $overridesSourcePath, $overridesPath)) {
         if (Test-Path -LiteralPath $path) {
             Remove-Item -LiteralPath $path
         }

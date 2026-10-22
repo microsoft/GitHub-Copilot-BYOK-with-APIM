@@ -137,6 +137,7 @@ For GitHub's instructions, see
 | Guide | Use it to |
 | --- | --- |
 | [Getting started](docs/getting-started.md) | Deploy and verify the gateway |
+| [Deployment parameters](docs/parameters.md) | Look up every parameter, default, dependency, and cost implication |
 | [Traffic flow and WAF placement](docs/traffic-flow.md) | Follow a request and troubleshoot connection or authorization failures |
 | [Client configuration](docs/client-surfaces.md) | Set up VS Code, Copilot CLI, or enterprise BYOK |
 | [AI Gateway capabilities](docs/ai-gateway.md) | Enable token governance, metrics, content safety, caching, or backend resilience |

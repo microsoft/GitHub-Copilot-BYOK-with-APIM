@@ -3,6 +3,8 @@
 > New to the project? Start with the **[getting started guide](getting-started.md)** to
 > deploy the gateway, then come back here for the design details.
 
+For configuration defaults and dependencies, see the [parameter reference](parameters.md).
+
 ```mermaid
 flowchart LR
   subgraph Clients["Copilot BYOK surfaces"]

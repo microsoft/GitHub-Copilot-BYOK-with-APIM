@@ -31,6 +31,18 @@ to fill in, plus an explicit `deployAppGateway = true`:
 
 Optional AI features remain off. Existing parameter names remain supported.
 
+### Separate setup from advanced configuration
+
+- Keep a few common overrides commented out in the starter: APIM tier, model allowlists,
+  and Foundry project discovery, alongside endpoint and certificate settings.
+- Document every supported parameter in the grouped [parameter reference](../parameters.md),
+  including its type, default, dependencies, and cost implications.
+- Keep [Getting started](../getting-started.md) focused on the recommended deployment path.
+  Use [feature guides](../ai-gateway.md) for working examples and verification.
+
+Defaults belong in the template. Omit unused overrides rather than copying their defaults into
+parameter files. Commented examples aid discovery; they are not a second parameter catalog.
+
 ### Derive values instead of repeating them
 
 | Parameter | New default |
@@ -74,6 +86,8 @@ gateway resource exists with `Succeeded` status and the `WAF_v2` SKU.
   must not send keys or connect Copilot before HTTPS is verified.
 - WAF still starts in Detection mode; enabling the gateway does not enable blocking.
 - APIM remains public. The gateway-secret policy is not network isolation.
+- Advanced settings remain discoverable without making the starter a wall of configuration.
+  Template parameter changes must be reflected in the reference.
 
 ## Migration
 
@@ -91,12 +105,18 @@ gateway resource exists with `Succeeded` status and the `WAF_v2` SKU.
 - **Enable the gateway only in the example:** preserves older automation behavior, but leaves
   direct template deployments inconsistent with the documented baseline.
 - **Remove advanced parameters:** simplifies the interface but breaks existing customization.
+- **Comment out every parameter in the starter:** preserves the wall of settings, duplicates
+  documentation, and encourages unnecessary overrides that can drift from template defaults.
 
 ## Scope and validation
 
 Implemented in [the Bicep template](../../infra/main.bicep) and
 [generated ARM template](../../infra/main.json), with
 [offline regression checks](../../tests/deployment-contract.ps1).
+
+The checks require every parameter to appear exactly once in the reference with a matching type
+and default. They also compile the starter both as provided and with its commented overrides
+enabled. Documentation links and heading anchors are checked separately.
 
 API-version defaults are unchanged. Deprecating the redundant `foundryApiVersion` setting was
 discussed but is not part of this decision.
