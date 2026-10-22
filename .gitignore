@@ -270,6 +270,7 @@ ClientBin/
 *.dbproj.schemaview
 *.jfm
 *.pfx
+pfx.b64.txt
 *.publishsettings
 orleans.codegen.cs
 
