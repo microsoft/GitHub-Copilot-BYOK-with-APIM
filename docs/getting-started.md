@@ -195,9 +195,13 @@ Copilot BYOK requires HTTPS. After the first deployment:
 
 1. **Configure DNS.** Create an `A` record pointing your hostname at `appGatewayPublicIp`.
    Confirm it resolves, for example with `nslookup copilot.example.com`.
-2. **Obtain a certificate.** Issue a publicly trusted certificate for that hostname, such as
-   Let's Encrypt using Posh-ACME with DNS-01. Export a password-protected, full-chain PFX.
+2. **Obtain a certificate.** Follow [Get a Let's Encrypt certificate](lets-encrypt.md) for
+   Windows/PowerShell instructions using Posh-ACME and DNS-01 validation. It generates a
+   password-protected, full-chain PFX. You can also use another publicly trusted certificate.
 3. **Base64-encode the PFX** using PowerShell:
+
+   Use the full path to the generated `fullchain.pfx` in the command below. Run it from a private
+   directory outside the repository so the base64-encoded private key is not saved in the repo.
 
    ```powershell
    $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes('fullchain.pfx'))
