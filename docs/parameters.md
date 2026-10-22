@@ -37,8 +37,9 @@ availability and feature support depend on the tier and region.
 ## Organizations and request limits
 
 Keys authorize organizations, not individual users. Each org gets a separate path and policy
-without another gateway. Generate a unique key per org with `openssl rand -hex 32` and retain
-it for redeployments. Use deployment names, not base model names, in model lists.
+without another gateway. Generate a unique key per org using the OpenSSL or PowerShell commands in
+[Getting started](getting-started.md#step-2--clone-the-repo-and-generate-keys) and retain it for
+redeployments. Use deployment names, not base model names, in model lists.
 
 | Parameter | Type | Default | Purpose |
 | --- | --- | --- | --- |

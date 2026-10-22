@@ -1,7 +1,10 @@
 using './main.bicep'
 
 // Required: replace these values.
-// Generate each org key and the separate gateway secret with: openssl rand -hex 32
+// Generate each org key and the separate gateway secret with either command:
+// OpenSSL: openssl rand -hex 32
+// PowerShell 7.2+:
+// [Convert]::ToHexString([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLowerInvariant()
 // Run once per secret; reuse the values on redeployment unless intentionally rotating them.
 param apimName = 'your-globally-unique-apim-name'
 param apimPublisherEmail = 'your-email@example.com'

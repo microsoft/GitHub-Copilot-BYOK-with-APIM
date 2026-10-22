@@ -17,7 +17,8 @@ Commands use Bash unless labeled PowerShell. Replace angle-bracketed placeholder
   another subscription.
 - An existing Foundry / Azure OpenAI account with a model deployment supporting **tool calling**
   and **streaming**. A context window of at least **128k tokens** is recommended.
-- [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli), Git, and OpenSSL.
+- [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli), Git, and either
+  PowerShell 7.2+ or OpenSSL for key generation.
   Use Bicep CLI 0.38 or later (`az bicep upgrade`).
 - A hostname you control and a publicly trusted TLS certificate; see [Enable HTTPS](#production-enable-https-on-the-app-gateway).
 - A Copilot client: VS Code, Copilot CLI, or enterprise BYOK on GitHub.com.
@@ -64,10 +65,18 @@ cd GitHub-Copilot-BYOK-with-APIM
 ```
 
 Generate one unique client key per organization and one separate Application Gateway secret.
-Run this once for each value:
+Run either command once per secret. Both produce 32 random bytes as 64 hex characters.
+
+**OpenSSL:**
 
 ```bash
 openssl rand -hex 32
+```
+
+**PowerShell 7.2+ (no OpenSSL required):**
+
+```powershell
+[Convert]::ToHexString([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLowerInvariant()
 ```
 
 Store the client keys in `orgKeys` and the gateway secret in `appGwSharedSecret` in the next step.
