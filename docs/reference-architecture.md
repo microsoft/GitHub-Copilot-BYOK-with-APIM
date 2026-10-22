@@ -53,8 +53,8 @@ org an isolated, independently rotatable credential on shared infrastructure.
 
 ## Per-organization multi-tenant BYOK
 
-The gateway is **multi-tenant by organization** (`infra/main.bicep`, driven by the `orgs`
-array and `orgKeys` map). It stamps out an independent slice per organization so you can
+The gateway is **multi-tenant by organization** (`infra/main.bicep`, with `orgs` inferred from
+the `orgKeys` map unless overridden). It stamps out an independent slice per organization so you can
 attribute, throttle, and rotate credentials **per org** on a single shared APIM instance —
 no extra gateways. (A single-org deployment is just this with one entry in `orgs`.)
 
@@ -175,12 +175,14 @@ always `403`. In that case the endpoint owner must expose a **key-based** endpoi
 key is injected by policy instead. Same-tenant endpoints just need the owner to grant the
 APIM identity's principal the `.../onlineEndpoints/score/action` role.
 
-## Fronting APIM with an Application Gateway (WAF, optional)
+## Fronting APIM with an Application Gateway (WAF, enabled by default)
 
-When `deployAppGateway = true`, the template stands up an **Application Gateway (WAF_v2)** in
-front of the **still-public** APIM instance and enforces that traffic arrives through it. This
+The template defaults to `deployAppGateway = true`, creating an **Application Gateway (WAF_v2)** in
+front of the **still-public** APIM instance and enforcing that traffic arrives through it. This
 adds an OWASP web application firewall and a single controlled ingress without moving APIM onto
-a private network (which would break server-side callers such as GitHub Enterprise BYOK).
+a private network. It incurs Azure charges; set `deployAppGateway = false` explicitly for APIM-only
+deployments without WAF. The gateway name defaults to `<apimName>-appgw`. The shared gateway
+secret must be at least 32 characters and is not generated or rotated by the template.
 
 ```mermaid
 flowchart LR
@@ -215,11 +217,13 @@ and `appGatewayFrontendUrl` give you the address to point clients at and to feed
 
 ### HTTPS listener (optional)
 
-Set `appGwEnableHttps = true` to add a 443 listener terminating TLS at the gateway, with an
+Supplying `appGwHttpsPfxBase64` enables HTTPS automatically, adding a 443 listener with an
 automatic **HTTP→HTTPS 301 redirect** (the HTTP:80 listener stops proxying and only redirects).
 The certificate is supplied as a base64-encoded PFX (full chain) directly on the gateway via
 `appGwHttpsPfxBase64` + `appGwHttpsPfxPassword` — no Key Vault or managed identity required, which
 keeps it working in subscriptions whose policy forces Key Vaults to private-only networking.
+Both certificate values are required. An explicit `appGwEnableHttps = false` overrides inference;
+remove it when upgrading an older parameter file.
 
 A free 90-day Let's Encrypt cert works well here. Issue it once with Posh-ACME (DNS-01), export
 the full-chain PFX, then base64-encode it into the params file:
@@ -235,7 +239,7 @@ can reach).
 
 **Wiring it up end to end.** The listener alone isn't enough — you also need a DNS record for
 your hostname pointing at the gateway's public IP and a certificate issued for that hostname. The
-step-by-step flow (get the IP, add the `A` record, issue the cert, set `appGwEnableHttps`, redeploy,
+step-by-step flow (get the IP, add the `A` record, supply the certificate, redeploy,
 point clients at your hostname) is in the [getting started guide](getting-started.md#production-enable-https-on-the-app-gateway).
 
 One design note that trips people up: the `appGatewayFrontendUrl` and `orgProxyBasePaths` outputs

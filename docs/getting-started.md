@@ -4,6 +4,10 @@ Deploy an HTTPS gateway for your existing Microsoft Foundry models, then connect
 Each GitHub organization gets its own `/byok/<org>` path, key, and policy on one shared gateway.
 For the design, see the [reference architecture](reference-architecture.md).
 
+**Default setup: Application Gateway (WAF_v2) + APIM.** Application Gateway incurs Azure charges.
+The first deployment creates the gateway; adding a certificate enables HTTPS. Do not connect
+Copilot or send keys until HTTPS is verified.
+
 Commands use Bash unless labeled PowerShell. Replace angle-bracketed placeholders with your values.
 
 ## Prerequisites
@@ -14,7 +18,7 @@ Commands use Bash unless labeled PowerShell. Replace angle-bracketed placeholder
 - An existing Foundry / Azure OpenAI account with a model deployment supporting **tool calling**
   and **streaming**. A context window of at least **128k tokens** is recommended.
 - [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli), Git, and OpenSSL.
-  Azure CLI installs Bicep tooling on first use.
+  Use Bicep CLI 0.38 or later (`az bicep upgrade`).
 - A hostname you control and a publicly trusted TLS certificate; see [Enable HTTPS](#production-enable-https-on-the-app-gateway).
 - A Copilot client: VS Code, Copilot CLI, or enterprise BYOK on GitHub.com.
 
@@ -44,8 +48,10 @@ For optional features, register these providers with the same command:
 
 ## Step 1 — Collect your Foundry details
 
-Record the account name, subscription ID, resource group, and endpoint base URL
-(under **Keys and Endpoint**), for example `https://contoso-foundry.openai.azure.com`.
+Record the account name and resource group. The endpoint defaults to
+`https://<foundryAccountName>.openai.azure.com`. If **Keys and Endpoint** shows a different URL,
+use that as the `foundryBackendBaseUrl` override. For cross-subscription deployments, also record
+the Foundry subscription ID.
 
 Also record the model's **deployment name**, not its base model name. Clients send this as `model`.
 
@@ -64,7 +70,8 @@ openssl rand -hex 32
 ```
 
 Store the client keys in `orgKeys` and the gateway secret in `appGwSharedSecret` in the next step.
-Never reuse a client key as the gateway secret.
+The gateway secret must contain at least 32 characters. Never reuse a client key as the gateway
+secret, and keep the same values for redeployments unless intentionally rotating them.
 
 ## Step 3 — Set deployment parameters
 
@@ -74,30 +81,37 @@ Copy the [example parameters](../infra/example.bicepparam):
 cp infra/example.bicepparam infra/my.bicepparam
 ```
 
-Edit the existing entries in `infra/my.bicepparam`:
+### Required: edit six settings
+
+Edit these entries in `infra/my.bicepparam`; do not copy every parameter from the template:
 
 | Parameter | Value |
 | --- | --- |
 | `apimName` | Globally unique APIM instance name |
-| `apimPublisherName` / `apimPublisherEmail` | Organization name and contact email |
-| `apimSkuName` / `apimSkuCapacity` | Tier and units; `Developer` is suitable for testing |
+| `apimPublisherEmail` | Contact email |
 | `foundryAccountName` | Existing Foundry account name |
-| `foundryAccountSubscriptionId` | Foundry subscription ID; omit to use the selected subscription |
 | `foundryAccountResourceGroup` | Foundry resource group |
-| `foundryBackendBaseUrl` | Endpoint base URL from Step 1 |
-| `orgs` | Organization slugs using lowercase letters, numbers, and hyphens |
-| `orgKeys` | Map of each slug to its client key |
-| `deployAppGateway` | `true` for the gateway path in this guide; defaults to `false` |
-| `appGwName` | Application Gateway name |
+| `orgKeys` | Organization slug to client key; slugs use lowercase letters, numbers, and hyphens |
 | `appGwSharedSecret` | Separate gateway secret from Step 2 |
 
-Replace sample organizations in **all** per-org maps, including optional overrides.
-Leave `appGwEnableHttps = false` until the certificate is ready.
+Leave `deployAppGateway = true` in the starter file. The template also defaults to `true`.
 
-Optional settings:
+### Inferred: leave these alone unless needed
+
+| Setting | Default |
+| --- | --- |
+| `orgs` | Organization slugs from `orgKeys` |
+| `appGwName` | `<apimName>-appgw` |
+| `foundryBackendBaseUrl` | `https://<foundryAccountName>.openai.azure.com` |
+| `foundryAccountSubscriptionId` | Selected deployment subscription |
+| `appGwEnableHttps` | Enabled when `appGwHttpsPfxBase64` is supplied |
+
+### Optional: add only what you need
 
 | Parameter | Purpose |
 | --- | --- |
+| `foundryAccountSubscriptionId` | Set when Foundry is in a different subscription |
+| `apimSkuName` / `apimSkuCapacity` | APIM tier and units; defaults to `Developer` / `1` for testing |
 | `orgModels` | Per-org model allowlists; omitted orgs or empty arrays are unrestricted |
 | `perOrgRateLimitCalls` / `perOrgRateLimitRenewalPeriod` | Request limit per org; defaults to 300 calls per 60 seconds |
 | `foundryProjectName` | Include the project's managed-compute deployments in `/models` |
@@ -105,7 +119,12 @@ Optional settings:
 | `defaultTemperatureModelIds` | Normalize Chat Completions temperature to `1` for models that require it |
 
 Keep the API-version defaults (`foundryApiVersion`, `foundryDeploymentsApiVersion`, and
-`foundryProjectDeploymentsApiVersion`) unless your backend requires different versions.
+`foundryProjectDeploymentsApiVersion`). For AI features, use the [AI Gateway guide](ai-gateway.md).
+
+**Existing parameter files override defaults.** If upgrading from an older example, change
+`deployAppGateway = false` to `true` and remove an explicit `appGwEnableHttps = false` when adding
+your certificate. Preserve existing custom names and endpoints. Deployments that previously omitted
+`deployAppGateway` will now add it; set `false` explicitly only if you intend to run APIM without WAF.
 
 **Do not commit secrets.** `infra/my.bicepparam` is ignored by Git. Protect any copies, keys,
 passwords, PFX files, and base64-encoded certificate data.
@@ -127,21 +146,37 @@ This creates APIM, Application Gateway, and the per-org APIs and policies. It gr
 managed identity the **Foundry User** role on your Foundry account. APIM provisioning can take
 30–45 minutes.
 
-Read the deployment outputs:
+### Confirm Application Gateway exists
+
+Read the configuration summary:
 
 ```bash
 az deployment group show \
   --resource-group <resource-group> \
   --name main \
-  --query properties.outputs
+  --query properties.outputs.deploymentSummary.value
 ```
 
-| Output | Use |
-| --- | --- |
-| `appGatewayPublicIp` | IP for your DNS `A` record |
-| `appGatewayFrontendUrl` | Initial HTTP address, not the HTTPS client URL |
-| `apimGatewayUrl` / `orgProxyBasePaths` | APIM backend URLs; direct requests without the gateway secret return `403` |
-| `backendCompletionUrl` | Foundry backend URL for reference |
+Check `applicationGatewayEnabled: true`, the expected `applicationGatewayName`, and
+`wafMode: "Detection"`. `httpsEnabled: false` is expected until the next section.
+Use that gateway name in this resource check:
+
+```bash
+az network application-gateway show \
+  --resource-group <resource-group> \
+  --name <appgw-name> \
+  --query "{state:provisioningState,sku:sku.name}"
+```
+
+Expect `state: "Succeeded"` and `sku: "WAF_v2"`. **Stop if the gateway is missing or disabled.**
+Check `deployAppGateway` in the parameter file actually used by the deployment, then redeploy.
+
+Read the public IP for DNS:
+
+```bash
+az deployment group show --resource-group <resource-group> --name main \
+  --query properties.outputs.appGatewayPublicIp.value --output tsv
+```
 
 Complete HTTPS setup before sending keys or connecting Copilot. WAF starts in **Detection**
 mode: it records matches but does not block requests. See [WAF tuning](traffic-flow.md#where-the-waf-is)
@@ -165,12 +200,13 @@ Copilot BYOK requires HTTPS. After the first deployment:
 4. **Update** `infra/my.bicepparam`:
 
    ```bicep
-   param appGwEnableHttps = true
    param appGwHttpsPfxBase64 = '<contents of pfx.b64.txt>'
    param appGwHttpsPfxPassword = '<the PFX password>'
    ```
 
-5. **Redeploy** using the Step 4 command. Port 443 now terminates TLS; port 80 redirects to HTTPS.
+5. **Redeploy** using the Step 4 command. HTTPS is inferred from the PFX; no enable flag is needed.
+   Recheck `deploymentSummary`: both `applicationGatewayEnabled` and `httpsEnabled` must be `true`.
+   Port 443 terminates TLS; port 80 redirects to HTTPS.
 
 Use `https://<gateway-host>/byok/<org>` as the client base URL, not the APIM or HTTP output URLs.
 Renew and redeploy the certificate before it expires; renewal is manual unless automated.
@@ -218,6 +254,9 @@ Use the same HTTPS base URL, organization key, and Foundry deployment name:
 
 | Symptom | Check or fix |
 | --- | --- |
+| Application Gateway missing | Check the deployed `deployAppGateway` value, especially in older parameter files |
+| HTTPS stays disabled after adding a PFX | Remove an explicit `appGwEnableHttps = false`; supply both PFX parameters and redeploy |
+| Gateway secret validation fails | Set `appGwSharedSecret` to a stable random value of at least 32 characters |
 | `403 gateway_required` | Use the gateway's HTTPS hostname, not APIM. If already using it, check the gateway secret |
 | `401 invalid_api_key` | Match the client key to the `/byok/<org>` path; redeploy after key rotation |
 | Chat returns `5xx`, but `/models` works | Check `foundryBackendBaseUrl` and the deployment name; allow time for the role assignment to propagate |
