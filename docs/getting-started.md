@@ -118,8 +118,9 @@ Leave `deployAppGateway = true` in the starter file. The template also defaults 
 | `extraModelIds` | Manually add callable deployments missing from discovery |
 | `defaultTemperatureModelIds` | Normalize Chat Completions temperature to `1` for models that require it |
 
-Keep the API-version defaults (`foundryApiVersion`, `foundryDeploymentsApiVersion`, and
-`foundryProjectDeploymentsApiVersion`). For AI features, use the [AI Gateway guide](ai-gateway.md).
+For all types, defaults, dependencies, and cost notes, see the
+[parameter reference](parameters.md). Keep discovery API versions at their defaults; inference
+uses `/openai/v1`. For AI feature examples, use the [AI Gateway guide](ai-gateway.md).
 
 **Existing parameter files override defaults.** If upgrading from an older example, change
 `deployAppGateway = false` to `true` and remove an explicit `appGwEnableHttps = false` when adding

@@ -26,6 +26,17 @@ param deployAppGateway = true
 // param appGwHttpsPfxBase64 = '<base64-encoded-pfx>'
 // param appGwHttpsPfxPassword = '<pfx-password>'
 
-// Optional features are off. Add only the overrides you need:
-// - Per-org model allowlists and limits: main.bicep, "Organization access and request limits".
-// - Token governance, telemetry, content safety, caching, resilience: ../docs/ai-gateway.md.
+// Common overrides: uncomment only what you need.
+// Choose a production APIM tier deliberately; Developer is for testing.
+// param apimSkuName = 'StandardV2'
+
+// Restrict which deployments this org may discover and call.
+// param orgModels = {
+//   'your-github-org': [ 'your-model-deployment' ]
+// }
+
+// Also discover an existing Foundry project's managed-compute deployments.
+// param foundryProjectName = 'your-foundry-project'
+
+// All parameters, defaults, dependencies, and cost notes: ../docs/parameters.md.
+// Optional AI features remain off; examples and verification: ../docs/ai-gateway.md.
