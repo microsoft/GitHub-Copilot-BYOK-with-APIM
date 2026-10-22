@@ -6,6 +6,7 @@ using './main.bicep'
 param apimName = 'your-globally-unique-apim-name'
 param apimPublisherEmail = 'your-email@example.com'
 param foundryAccountName = 'your-foundry-account'
+param foundryAccountSubscriptionId = '<foundry-subscription-id>'
 param foundryAccountResourceGroup = 'your-foundry-resource-group'
 param orgKeys = {
   'your-github-org': '<org-key>'
@@ -16,9 +17,7 @@ param appGwSharedSecret = '<gateway-secret>'
 param deployAppGateway = true
 
 // Inferred: orgs from orgKeys, appGwName from apimName, and the standard Foundry endpoint
-// from foundryAccountName. Foundry defaults to the deployment subscription.
-// Uncomment only when these defaults do not match your existing Foundry account:
-// param foundryAccountSubscriptionId = '<foundry-subscription-id>'
+// from foundryAccountName. Uncomment only for a nonstandard Foundry endpoint:
 // param foundryBackendBaseUrl = 'https://your-custom-endpoint'
 
 // HTTPS: after creating DNS and obtaining a password-protected full-chain PFX, supply both.

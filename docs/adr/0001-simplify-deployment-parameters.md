@@ -19,17 +19,23 @@ Keep advanced overrides, but remove them from the starter configuration unless n
 
 ### Reduce the starter configuration
 
-The [starter file](../../infra/example.bicepparam) now contains seven assignments: six values
+The [starter file](../../infra/example.bicepparam) now contains eight assignments: seven values
 to fill in, plus an explicit `deployAppGateway = true`:
 
 - `apimName`
 - `apimPublisherEmail`
 - `foundryAccountName`
+- `foundryAccountSubscriptionId`
 - `foundryAccountResourceGroup`
 - `orgKeys`
 - `appGwSharedSecret`
 
 Optional AI features remain off. Existing parameter names remain supported.
+
+Keep the Foundry subscription ID explicit because the existing account can be in a different
+subscription from APIM. It scopes the backend resource ID and the APIM identity's role assignment;
+the account name and endpoint do not trigger cross-subscription discovery. The template retains
+its deployment-subscription default for compatibility, but the starter does not rely on it.
 
 ### Separate setup from advanced configuration
 
@@ -86,6 +92,8 @@ gateway resource exists with `Succeeded` status and the `WAF_v2` SKU.
   must not send keys or connect Copilot before HTTPS is verified.
 - WAF still starts in Detection mode; enabling the gateway does not enable blocking.
 - APIM remains public. The gateway-secret policy is not network isolation.
+- The starter makes the Foundry account's subscription explicit rather than silently assuming
+  the APIM deployment subscription.
 - Advanced settings remain discoverable without making the starter a wall of configuration.
   Template parameter changes must be reflected in the reference.
 
@@ -95,7 +103,9 @@ gateway resource exists with `Succeeded` status and the `WAF_v2` SKU.
    `deployAppGateway = false` only when adopting the gateway topology.
 2. Supply a stable gateway secret meeting the new minimum length.
 3. Supply both PFX values and remove an explicit `appGwEnableHttps = false` to use HTTPS inference.
-4. Preserve existing custom gateway names, endpoints, and cross-subscription settings.
+4. Preserve existing custom gateway names and endpoints. Keep `foundryAccountSubscriptionId`
+   and `foundryAccountResourceGroup` set to the existing Foundry account's location; do not replace
+   a cross-subscription value with the APIM deployment subscription.
 5. Recheck the gateway resource and summary. Both gateway and HTTPS enablement must be `true`
    before connecting Copilot through Application Gateway.
 
@@ -105,6 +115,8 @@ gateway resource exists with `Succeeded` status and the `WAF_v2` SKU.
 - **Enable the gateway only in the example:** preserves older automation behavior, but leaves
   direct template deployments inconsistent with the documented baseline.
 - **Remove advanced parameters:** simplifies the interface but breaks existing customization.
+- **Hide the Foundry subscription in optional overrides:** makes separate-subscription setups
+  easy to misconfigure. Keep the template default for compatibility, but expose the starter input.
 - **Comment out every parameter in the starter:** preserves the wall of settings, duplicates
   documentation, and encourages unnecessary overrides that can drift from template defaults.
 
