@@ -4,6 +4,7 @@
 ## Get latest from https://github.com/github/gitignore/blob/main/VisualStudio.gitignore
 
 /infra/my.bicepparam
+/infra/*.bak
 
 # User-specific files
 *.rsuser
@@ -269,6 +270,7 @@ ClientBin/
 *.dbproj.schemaview
 *.jfm
 *.pfx
+pfx.b64.txt
 *.publishsettings
 orleans.codegen.cs
 

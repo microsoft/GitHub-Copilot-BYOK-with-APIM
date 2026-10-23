@@ -4,9 +4,9 @@ Copilot requests pass through Application Gateway and Azure API Management (APIM
 Microsoft Foundry. The web application firewall (WAF) inspects requests **inside Application
 Gateway**, after TLS termination.
 
-This guide assumes Application Gateway and HTTPS are enabled (`deployAppGateway = true`,
-`appGwEnableHttps = true`). Replace `gateway.example.com` with your public hostname and `<org>`
-with your GitHub organization slug.
+Application Gateway is deployed by default. This guide assumes you have also supplied a TLS
+certificate, which enables HTTPS automatically. Replace `gateway.example.com` with your public
+hostname and `<org>` with your GitHub organization slug.
 
 ## Request path
 

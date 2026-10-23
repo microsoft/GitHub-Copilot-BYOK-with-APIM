@@ -5,6 +5,8 @@ the parameter(s) that turn it on, and how to verify and use it after deploying. 
 rationale (policy order, tenant isolation, tradeoffs), see the
 [reference architecture](reference-architecture.md#ai-gateway-capabilities-opt-in).
 
+For every setting, default, and dependency, see the [parameter reference](parameters.md).
+
 > **Everything here is off by default.** The base deployment behaves exactly as the
 > [getting started guide](getting-started.md) describes. Each capability is a parameter you set in
 > your params file (e.g. `infra/my.bicepparam`) and a redeploy — nothing changes for your clients

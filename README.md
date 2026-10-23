@@ -68,10 +68,10 @@ completions still use GitHub-hosted models.
 1. **Prepare a model.** Use an existing Foundry account with a deployment that meets the
    [model requirements](#model-requirements) below.
 2. **Deploy the gateway.** Follow [Getting started](docs/getting-started.md) for prerequisites,
-   per-org keys, Bicep parameters, and verification. Enable `deployAppGateway` and
-   `appGwEnableHttps` for the HTTPS gateway path described here; both default to `false`.
+   seven starter settings and verification. Application Gateway is now enabled by default and
+   incurs Azure charges; APIM-only deployments must explicitly set `deployAppGateway = false`.
    [Configure DNS and a TLS certificate](docs/getting-started.md#production-enable-https-on-the-app-gateway)
-   before connecting Copilot.
+   before connecting Copilot; supplying the PFX enables HTTPS automatically.
 3. **Connect Copilot.** Follow [client configuration](docs/client-surfaces.md), or the
    enterprise setup below.
 
@@ -137,10 +137,16 @@ For GitHub's instructions, see
 | Guide | Use it to |
 | --- | --- |
 | [Getting started](docs/getting-started.md) | Deploy and verify the gateway |
+| [Let's Encrypt certificate](docs/lets-encrypt.md) | Obtain a full-chain PFX with PowerShell and manual DNS validation |
+| [Deployment parameters](docs/parameters.md) | Look up every parameter, default, dependency, and cost implication |
 | [Traffic flow and WAF placement](docs/traffic-flow.md) | Follow a request and troubleshoot connection or authorization failures |
 | [Client configuration](docs/client-surfaces.md) | Set up VS Code, Copilot CLI, or enterprise BYOK |
 | [AI Gateway capabilities](docs/ai-gateway.md) | Enable token governance, metrics, content safety, caching, or backend resilience |
 | [Reference architecture](docs/reference-architecture.md) | Understand the design, policies, and deployment parameters |
+| [Deployment parameter decision](docs/adr/0001-simplify-deployment-parameters.md) | Understand the new defaults, tradeoffs, and migration steps |
+
+For offline infrastructure checks, run `pwsh -File tests/deployment-contract.ps1`
+([test script](tests/deployment-contract.ps1)); requires Bicep CLI and does not deploy resources.
 
 ## Further reading
 

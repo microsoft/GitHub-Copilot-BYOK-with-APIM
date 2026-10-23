@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "13710907692564123136"
+      "templateHash": "1645300047849570450"
     }
   },
   "parameters": {
@@ -75,9 +75,10 @@
     },
     "foundryBackendBaseUrl": {
       "type": "string",
+      "defaultValue": "[format('https://{0}.openai.azure.com', parameters('foundryAccountName'))]",
       "minLength": 1,
       "metadata": {
-        "description": "Backend base URL, for example https://contoso.openai.azure.com."
+        "description": "Backend base URL. Defaults to the standard Azure OpenAI hostname for foundryAccountName; override for a different endpoint."
       }
     },
     "foundryBackends": {
@@ -180,8 +181,10 @@
     },
     "orgs": {
       "type": "array",
+      "defaultValue": "[objectKeys(parameters('orgKeys'))]",
+      "minLength": 1,
       "metadata": {
-        "description": "GitHub organization slugs that each get their own BYOK path (byok/<slug>), key, and policy. Use lowercase letters, numbers, and hyphens."
+        "description": "Organization slugs. Defaults to the keys in orgKeys; override to deploy a subset. Use lowercase letters, numbers, and hyphens."
       }
     },
     "orgModels": {
@@ -201,7 +204,7 @@
     "orgKeys": {
       "type": "secureObject",
       "metadata": {
-        "description": "Per-org client keys, keyed by org slug. Each org registers its own enterprise BYOK provider with this key and base URL https://<apim>.azure-api.net/byok/<slug>. Provide via a secure params file or Key Vault reference."
+        "description": "Per-org client keys, keyed by org slug. Clients use the gateway HTTPS hostname with /byok/<slug>. Provide via a secure params file or Key Vault reference."
       }
     },
     "perOrgRateLimitCalls": {
@@ -441,23 +444,23 @@
     },
     "deployAppGateway": {
       "type": "bool",
-      "defaultValue": false,
+      "defaultValue": true,
       "metadata": {
-        "description": "Deploy an Application Gateway (WAF_v2) in front of the public APIM instance and enforce that requests arrive through it."
+        "description": "Deploy Application Gateway (WAF_v2) and require requests to traverse it. Enabled by default and incurs Azure charges. Set false explicitly for APIM-only deployments without WAF."
       }
     },
     "appGwName": {
       "type": "string",
-      "defaultValue": "",
+      "defaultValue": "[format('{0}-appgw', parameters('apimName'))]",
       "metadata": {
-        "description": "Name of the Application Gateway (required when deployAppGateway is true)."
+        "description": "Application Gateway name. Defaults to <apimName>-appgw."
       }
     },
     "appGwSharedSecret": {
       "type": "securestring",
       "defaultValue": "",
       "metadata": {
-        "description": "Shared secret that App Gateway injects as X-AppGw-Secret and APIM validates. Generate a strong random value; provide via a secure params file or Key Vault."
+        "description": "Shared secret injected by Application Gateway and validated by APIM. Required when deployAppGateway is true; use at least 32 characters. Generate once and reuse on redeployment."
       }
     },
     "appGwWafMode": {
@@ -481,9 +484,9 @@
     },
     "appGwEnableHttps": {
       "type": "bool",
-      "defaultValue": false,
+      "defaultValue": "[not(empty(parameters('appGwHttpsPfxBase64')))]",
       "metadata": {
-        "description": "Enable an HTTPS listener (443) on the App Gateway with HTTP->HTTPS redirect. Requires appGwHttpsPfxBase64 and appGwHttpsPfxPassword."
+        "description": "Enable HTTPS with HTTP-to-HTTPS redirect. Defaults to true when a PFX is supplied. Requires deployAppGateway and both certificate parameters; set false only for bootstrap or testing."
       }
     },
     "appGwHttpsPfxBase64": {
@@ -605,6 +608,8 @@
     "responsesPolicyXml": "<policies>\r\n  <inbound>\r\n    <!-- Runs the API-level auth/attribution policy first (sets byokOrg + byokModel), then the\r\n         per-org AI governance block (token limits + token metrics). __AI_GOVERNANCE__ is\r\n         substituted per org at deploy time and is empty when no limits/metrics are configured. -->\r\n    <base />\r\n    __AI_GOVERNANCE__\r\n  </inbound>\r\n  <backend>\r\n    <base />\r\n  </backend>\r\n  <outbound>\r\n    <base />\r\n  </outbound>\r\n  <on-error>\r\n    <base />\r\n  </on-error>\r\n</policies>\r\n",
     "appGwGuardTemplate": "<!--\r\n  App Gateway front-door enforcement (injected only when the App Gateway feature is enabled).\r\n  App Gateway adds X-AppGw-Secret to every forwarded request via a rewrite rule set. Because\r\n  the rewrite SETS the header, any value a client tries to supply is overwritten at the gateway.\r\n  A caller hitting the public APIM hostname directly does not carry the secret and is rejected\r\n  with 403, so the WAF cannot be bypassed. __APPGW_IPFILTER__ is optionally replaced with an\r\n  ip-filter that additionally restricts inbound traffic to App Gateway's public IP.\r\n-->\r\n<choose>\r\n  <when condition=\"@(context.Request.Headers.GetValueOrDefault(&quot;X-AppGw-Secret&quot;, &quot;&quot;) != &quot;{{appGwSecret}}&quot;)\">\r\n    <return-response>\r\n      <set-status code=\"403\" reason=\"Forbidden\" />\r\n      <set-header name=\"Content-Type\" exists-action=\"override\">\r\n        <value>application/json</value>\r\n      </set-header>\r\n      <set-body>{\"error\":{\"message\":\"Direct access is not permitted; requests must traverse the gateway.\",\"type\":\"invalid_request_error\",\"code\":\"gateway_required\"}}</set-body>\r\n    </return-response>\r\n  </when>\r\n</choose>\r\n__APPGW_IPFILTER__\r\n",
     "staticModelsTemplate": "<policies>\r\n  <inbound>\r\n    <base />\r\n    <!--\r\n      Static /models response for orgs routed to a managed online endpoint (for example\r\n      Cohere), which does not expose a Foundry-style deployments listing. The advertised\r\n      model ids are injected at deploy time:\r\n        __MODELS_JSON__ -> comma-separated, quoted model id literals\r\n    -->\r\n    <return-response>\r\n      <set-status code=\"200\" reason=\"OK\" />\r\n      <set-header name=\"Content-Type\" exists-action=\"override\">\r\n        <value>application/json</value>\r\n      </set-header>\r\n      <set-body><![CDATA[@{\r\n          var created = DateTimeOffset.UtcNow.ToUnixTimeSeconds();\r\n          var allow = new HashSet<string>(StringComparer.OrdinalIgnoreCase);\r\n          foreach (var a in \"__ALLOWED_MODELS_CSV__\".Split(new char[]{','}, StringSplitOptions.RemoveEmptyEntries)) { var t = a.Trim(); if (t.Length > 0) { allow.Add(t); } }\r\n          var ids = new JArray(__MODELS_JSON__);\r\n          var data = new JArray();\r\n          foreach (var id in ids) {\r\n              var name = (string)id;\r\n              if (string.IsNullOrWhiteSpace(name)) { continue; }\r\n              if (allow.Count > 0 && !allow.Contains(name)) { continue; }\r\n              data.Add(new JObject {\r\n                  [\"id\"] = name,\r\n                  [\"object\"] = \"model\",\r\n                  [\"created\"] = created,\r\n                  [\"owned_by\"] = \"cohere\"\r\n              });\r\n          }\r\n          return new JObject {\r\n              [\"object\"] = \"list\",\r\n              [\"data\"] = data\r\n          }.ToString();\r\n      }]]></set-body>\r\n    </return-response>\r\n  </inbound>\r\n  <backend>\r\n    <base />\r\n  </backend>\r\n  <outbound>\r\n    <base />\r\n  </outbound>\r\n  <on-error>\r\n    <base />\r\n  </on-error>\r\n</policies>\r\n",
+    "validatedAppGwSharedSecret": "[if(or(not(parameters('deployAppGateway')), greaterOrEquals(length(parameters('appGwSharedSecret')), 32)), parameters('appGwSharedSecret'), fail('Application Gateway requires appGwSharedSecret with at least 32 characters. Generate it once with openssl rand -hex 32 and keep it for redeployments.'))]",
+    "appGwHttpsReady": "[if(not(parameters('appGwEnableHttps')), false(), if(not(parameters('deployAppGateway')), fail('HTTPS requires deployAppGateway = true. Remove the certificate settings or enable Application Gateway.'), if(or(empty(parameters('appGwHttpsPfxBase64')), empty(parameters('appGwHttpsPfxPassword'))), fail('HTTPS requires both appGwHttpsPfxBase64 and appGwHttpsPfxPassword.'), true())))]",
     "normalizedFoundryBackendBaseUrl": "[if(endsWith(parameters('foundryBackendBaseUrl'), '/'), substring(parameters('foundryBackendBaseUrl'), 0, sub(length(parameters('foundryBackendBaseUrl')), 1)), parameters('foundryBackendBaseUrl'))]",
     "foundryDeploymentsUrl": "[format('{0}/openai/deployments?api-version={1}', variables('normalizedFoundryBackendBaseUrl'), parameters('foundryDeploymentsApiVersion'))]",
     "foundryProjectDeploymentsUrl": "[if(empty(parameters('foundryProjectName')), 'https://disabled.invalid', format('https://{0}.services.ai.azure.com/api/projects/{1}/deployments?api-version={2}', parameters('foundryAccountName'), parameters('foundryProjectName'), parameters('foundryProjectDeploymentsApiVersion')))]",
@@ -833,7 +838,7 @@
       "properties": {
         "displayName": "appGwSecret",
         "secret": true,
-        "value": "[parameters('appGwSharedSecret')]"
+        "value": "[variables('validatedAppGwSharedSecret')]"
       },
       "dependsOn": [
         "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]"
@@ -1463,7 +1468,7 @@
             "value": "[format('{0}.azure-api.net', parameters('apimName'))]"
           },
           "sharedSecret": {
-            "value": "[parameters('appGwSharedSecret')]"
+            "value": "[variables('validatedAppGwSharedSecret')]"
           },
           "wafMode": {
             "value": "[parameters('appGwWafMode')]"
@@ -1472,7 +1477,7 @@
             "value": "[parameters('appGwCapacity')]"
           },
           "enableHttps": {
-            "value": "[parameters('appGwEnableHttps')]"
+            "value": "[variables('appGwHttpsReady')]"
           },
           "httpsPfxBase64": {
             "value": "[parameters('appGwHttpsPfxBase64')]"
@@ -1935,6 +1940,17 @@
     "applicationInsightsName": {
       "type": "string",
       "value": "[if(parameters('deployObservability'), reference(resourceId('Microsoft.Resources/deployments', 'observability'), '2025-04-01').outputs.appInsightsName.value, '')]"
+    },
+    "deploymentSummary": {
+      "type": "object",
+      "value": {
+        "applicationGatewayEnabled": "[parameters('deployAppGateway')]",
+        "applicationGatewayName": "[if(parameters('deployAppGateway'), parameters('appGwName'), '')]",
+        "applicationGatewayId": "[if(parameters('deployAppGateway'), resourceId('Microsoft.Network/applicationGateways', parameters('appGwName')), '')]",
+        "httpsEnabled": "[variables('appGwHttpsReady')]",
+        "wafMode": "[if(parameters('deployAppGateway'), parameters('appGwWafMode'), 'Not deployed')]",
+        "organizations": "[parameters('orgs')]"
+      }
     }
   }
 }

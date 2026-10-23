@@ -1,5 +1,6 @@
 targetScope = 'resourceGroup'
 
+// Deployment and APIM
 @description('Azure region for APIM and supporting resources.')
 param location string = resourceGroup().location
 
@@ -26,6 +27,7 @@ param apimSkuName string = 'Developer'
 @minValue(1)
 param apimSkuCapacity int = 1
 
+// Foundry backend
 @description('Microsoft Foundry / Azure OpenAI resource name.')
 param foundryAccountName string
 
@@ -35,9 +37,9 @@ param foundryAccountSubscriptionId string = subscription().subscriptionId
 @description('Resource group that contains the Foundry resource.')
 param foundryAccountResourceGroup string = resourceGroup().name
 
-@description('Backend base URL, for example https://contoso.openai.azure.com.')
+@description('Backend base URL. Defaults to the standard Azure OpenAI hostname for foundryAccountName; override for a different endpoint.')
 @minLength(1)
-param foundryBackendBaseUrl string
+param foundryBackendBaseUrl string = 'https://${foundryAccountName}.openai.azure.com'
 
 @description('Optional: additional Foundry accounts to form a load-balanced, circuit-broken backend pool. Each entry: { accountName, backendBaseUrl, subscriptionId?, resourceGroup?, priority?, weight? }. When non-empty, requests route through a pool named foundry-backend and every listed account must expose equivalent deployment names; when empty (default), the single primary backend is used. /models still lists the primary account only.')
 param foundryBackends array = []
@@ -57,6 +59,7 @@ param foundryProjectDeploymentsApiVersion string = '2025-05-01'
 @description('Extra model ids to merge into the live /models list. A manual safety net for deployments that are callable but not returned by the live deployment listings.')
 param extraModelIds array = []
 
+// Optional alternate backends
 @description('Optional managed online endpoint (for example Cohere) base URL, ending at the score API version, for example https://<endpoint>.<region>.inference.ml.azure.com/score/v1. Orgs listed in cohereOrgs route here instead of Foundry.')
 param cohereBackendBaseUrl string = ''
 
@@ -81,8 +84,12 @@ param mcOrgs array = []
 @description('Model ids advertised on /models for managed-compute orgs (the endpoint has no deployments listing).')
 param mcModelIds array = []
 
-@description('GitHub organization slugs that each get their own BYOK path (byok/<slug>), key, and policy. Use lowercase letters, numbers, and hyphens.')
-param orgs array
+// Organization access and request limits
+@description('Organization slugs. Defaults to the keys in orgKeys; override to deploy a subset. Use lowercase letters, numbers, and hyphens.')
+@minLength(1)
+// Only organization names are derived; key values remain secure.
+#disable-next-line secure-secrets-in-params
+param orgs array = objectKeys(orgKeys)
 
 @description('Optional per-org model allowlist, keyed by org slug -> array of model ids that org may see and call. An org listed here has its /models filtered to these ids and any chat/responses request for another model rejected with 403. Orgs omitted (or mapped to an empty array) are unrestricted.')
 param orgModels object = {}
@@ -90,7 +97,7 @@ param orgModels object = {}
 @description('Model deployment ids whose Chat Completions requests must use the default temperature of 1. Use for models that reject sampling temperatures sent by clients such as VS Code.')
 param defaultTemperatureModelIds array = []
 
-@description('Per-org client keys, keyed by org slug. Each org registers its own enterprise BYOK provider with this key and base URL https://<apim>.azure-api.net/byok/<slug>. Provide via a secure params file or Key Vault reference.')
+@description('Per-org client keys, keyed by org slug. Clients use the gateway HTTPS hostname with /byok/<slug>. Provide via a secure params file or Key Vault reference.')
 @secure()
 param orgKeys object
 
@@ -100,6 +107,7 @@ param perOrgRateLimitCalls int = 300
 @description('Per-org rate limit renewal period, in seconds.')
 param perOrgRateLimitRenewalPeriod int = 60
 
+// Optional token governance
 @description('Default tokens-per-minute (TPM) limit applied to every org unless overridden in orgTokensPerMinute. 0 disables the per-minute limit. Enforced only on /chat/completions and /responses; exceeding it returns 429.')
 param tokensPerMinuteDefault int = 0
 
@@ -197,13 +205,14 @@ param semanticCacheEnabledDefault bool = false
 @description('Per-org semantic cache enablement overrides, keyed by org slug (true/false).')
 param orgSemanticCacheEnabled object = {}
 
-@description('Deploy an Application Gateway (WAF_v2) in front of the public APIM instance and enforce that requests arrive through it.')
-param deployAppGateway bool = false
+// Application Gateway and HTTPS
+@description('Deploy Application Gateway (WAF_v2) and require requests to traverse it. Enabled by default and incurs Azure charges. Set false explicitly for APIM-only deployments without WAF.')
+param deployAppGateway bool = true
 
-@description('Name of the Application Gateway (required when deployAppGateway is true).')
-param appGwName string = ''
+@description('Application Gateway name. Defaults to <apimName>-appgw.')
+param appGwName string = '${apimName}-appgw'
 
-@description('Shared secret that App Gateway injects as X-AppGw-Secret and APIM validates. Generate a strong random value; provide via a secure params file or Key Vault.')
+@description('Shared secret injected by Application Gateway and validated by APIM. Required when deployAppGateway is true; use at least 32 characters. Generate once and reuse on redeployment.')
 @secure()
 param appGwSharedSecret string = ''
 
@@ -218,8 +227,10 @@ param appGwWafMode string = 'Detection'
 @minValue(1)
 param appGwCapacity int = 1
 
-@description('Enable an HTTPS listener (443) on the App Gateway with HTTP->HTTPS redirect. Requires appGwHttpsPfxBase64 and appGwHttpsPfxPassword.')
-param appGwEnableHttps bool = false
+@description('Enable HTTPS with HTTP-to-HTTPS redirect. Defaults to true when a PFX is supplied. Requires deployAppGateway and both certificate parameters; set false only for bootstrap or testing.')
+// Only certificate presence is derived, not certificate contents.
+#disable-next-line secure-secrets-in-params
+param appGwEnableHttps bool = !empty(appGwHttpsPfxBase64)
 
 @description('Base64-encoded PFX (full chain) for the App Gateway HTTPS listener.')
 @secure()
@@ -253,6 +264,13 @@ var chatCompletionsPolicyXml = replace(loadTextContent(chatCompletionsPolicyPath
 var responsesPolicyXml = loadTextContent(responsesPolicyPath)
 var appGwGuardTemplate = loadTextContent(appGwGuardPath)
 var staticModelsTemplate = loadTextContent(staticModelsPath)
+var validatedAppGwSharedSecret = !deployAppGateway || length(appGwSharedSecret) >= 32
+  ? appGwSharedSecret
+  : fail('Application Gateway requires appGwSharedSecret with at least 32 characters. Generate it once with openssl rand -hex 32 and keep it for redeployments.')
+var appGwHttpsReady = !appGwEnableHttps ? false
+  : !deployAppGateway ? fail('HTTPS requires deployAppGateway = true. Remove the certificate settings or enable Application Gateway.')
+  : empty(appGwHttpsPfxBase64) || empty(appGwHttpsPfxPassword) ? fail('HTTPS requires both appGwHttpsPfxBase64 and appGwHttpsPfxPassword.')
+  : true
 var normalizedFoundryBackendBaseUrl = endsWith(foundryBackendBaseUrl, '/') ? substring(foundryBackendBaseUrl, 0, length(foundryBackendBaseUrl) - 1) : foundryBackendBaseUrl
 var foundryDeploymentsUrl = '${normalizedFoundryBackendBaseUrl}/openai/deployments?api-version=${foundryDeploymentsApiVersion}'
 var foundryProjectDeploymentsUrl = empty(foundryProjectName) ? 'https://disabled.invalid' : 'https://${foundryAccountName}.services.ai.azure.com/api/projects/${foundryProjectName}/deployments?api-version=${foundryProjectDeploymentsApiVersion}'
@@ -497,7 +515,7 @@ resource appGwSecretNamedValue 'Microsoft.ApiManagement/service/namedValues@2023
   properties: {
     displayName: 'appGwSecret'
     secret: true
-    value: appGwSharedSecret
+    value: validatedAppGwSharedSecret
   }
 }
 
@@ -776,17 +794,17 @@ resource embeddingsBackend 'Microsoft.ApiManagement/service/backends@2023-05-01-
   }
 }
 
-// Optional Application Gateway (WAF_v2) front door for the public APIM instance.
+// Application Gateway is the default front door; APIM-only deployments explicitly opt out.
 module appGateway 'modules/app-gateway.bicep' = if (deployAppGateway) {
   name: 'appGateway'
   params: {
     location: location
     appGwName: appGwName
     apimGatewayHost: '${apimName}.azure-api.net'
-    sharedSecret: appGwSharedSecret
+    sharedSecret: validatedAppGwSharedSecret
     wafMode: appGwWafMode
     capacity: appGwCapacity
-    enableHttps: appGwEnableHttps
+    enableHttps: appGwHttpsReady
     httpsPfxBase64: appGwHttpsPfxBase64
     httpsPfxPassword: appGwHttpsPfxPassword
     tags: tags
@@ -808,3 +826,11 @@ output backendCompletionUrl string = '${normalizedFoundryBackendBaseUrl}/openai/
 output appGatewayPublicIp string = deployAppGateway ? appGateway!.outputs.publicIpAddress : ''
 output appGatewayFrontendUrl string = deployAppGateway ? appGateway!.outputs.frontendUrl : ''
 output applicationInsightsName string = deployObservability ? observability!.outputs.appInsightsName : ''
+output deploymentSummary object = {
+  applicationGatewayEnabled: deployAppGateway
+  applicationGatewayName: deployAppGateway ? appGwName : ''
+  applicationGatewayId: deployAppGateway ? resourceId('Microsoft.Network/applicationGateways', appGwName) : ''
+  httpsEnabled: appGwHttpsReady
+  wafMode: deployAppGateway ? appGwWafMode : 'Not deployed'
+  organizations: orgs
+}
