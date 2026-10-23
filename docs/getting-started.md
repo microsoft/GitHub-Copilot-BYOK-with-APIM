@@ -47,6 +47,40 @@ For optional features, register these providers with the same command:
 | `deployContentSafety = true` | `Microsoft.CognitiveServices` |
 | `deploySemanticCache = true` | `Microsoft.Cache` |
 
+### If public IP creation requires feature registration
+
+The gateway creates a Standard, Static, Azure-allocated public IP; it does not import your own
+IP address or prefix. If deployment fails with `SubscriptionNotRegisteredForFeature` for
+`Microsoft.Network/AllowBringYourOwnPublicIpAddress`, this is a **subscription feature-registration
+issue**, not a missing resource group. The `resourceGroups//` segment in the error does not mean
+you need to create another resource group. Registering the `Microsoft.Network` resource provider
+alone does not enable this feature.
+
+Run these commands in the subscription hosting the gateway, which may differ from the Foundry
+subscription:
+
+```bash
+az account set --subscription <target-subscription-id>
+az feature register --namespace Microsoft.Network --name AllowBringYourOwnPublicIpAddress
+az feature show --namespace Microsoft.Network --name AllowBringYourOwnPublicIpAddress --query properties.state --output tsv
+```
+
+Repeat the status command until it returns `Registered`. Then refresh the resource provider:
+
+```bash
+az provider register --namespace Microsoft.Network --wait
+```
+
+Retry [Step 4](#step-4--deploy) with the same parameter file and secrets. This feature registration
+is a recovery step for subscriptions reporting this error, not a prerequisite for every deployment.
+
+Feature registration requires `Microsoft.Features/*` permissions at subscription scope, included
+in the Contributor and Owner roles. If the status is `Pending`, registration may require Microsoft
+approval, particularly for internal Azure subscriptions. Open an Azure support request with the
+subscription ID, feature name, and deployment error; repeated deployments do not grant approval.
+See [feature registration](https://learn.microsoft.com/azure/azure-resource-manager/management/preview-features)
+and the [BYOIP registration guidance](https://learn.microsoft.com/en-us/answers/questions/1691016/registering-allowbringyourownpublicipaddress-featu).
+
 ## Step 1 — Collect your Foundry details
 
 Record the existing account's name, subscription ID, and resource group. Foundry can be in a
