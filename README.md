@@ -75,6 +75,9 @@ completions still use GitHub-hosted models.
 3. **Connect Copilot.** Follow [client configuration](docs/client-surfaces.md), or the
    enterprise setup below.
 
+For an existing gateway, use the [start/stop helper](docs/getting-started.md#start-or-stop-application-gateway)
+to manage its running state without redeploying.
+
 Keep organization keys, the gateway secret, and certificate data and passwords out of source
 control.
 
@@ -147,6 +150,8 @@ For GitHub's instructions, see
 
 For offline infrastructure checks, run `pwsh -File tests/deployment-contract.ps1`
 ([test script](tests/deployment-contract.ps1)); requires Bicep CLI and does not deploy resources.
+For offline start/stop helper checks, run `pwsh -File tests/app-gateway-helper.ps1`
+([helper tests](tests/app-gateway-helper.ps1)); requires PowerShell 7.2+ and mocks Azure CLI.
 
 ## Further reading
 

@@ -304,11 +304,48 @@ Use the same HTTPS base URL, organization key, and Foundry deployment name:
 | Copilot CLI | [OpenAI provider](client-surfaces.md#copilot-cli) (`openai`, not `azure`) |
 | Enterprise BYOK | [OpenAI-compatible provider](../README.md#configure-enterprise-byok); scope access to the matching organization |
 
+## Start or stop Application Gateway
+
+Use the [PowerShell helper](../scripts/app-gateway.ps1) to start or stop an existing gateway.
+Requires PowerShell 7.2+, Azure CLI, an `az login` session, and permission to read and
+start/stop the gateway. Run from the repository root:
+
+```powershell
+$resourceGroup = '<gateway-resource-group>'
+$gatewayName = '<appgw-name>'
+
+.\scripts\app-gateway.ps1 -Action Start -ResourceGroup $resourceGroup -GatewayName $gatewayName
+.\scripts\app-gateway.ps1 -Action Stop -ResourceGroup $resourceGroup -GatewayName $gatewayName
+
+# Preview without changing the gateway:
+.\scripts\app-gateway.ps1 -Action Stop -ResourceGroup $resourceGroup -GatewayName $gatewayName -WhatIf
+```
+
+The gateway name defaults to `<apimName>-appgw` at deployment unless `appGwName` is overridden.
+Use the **gateway deployment's resource group**, not `foundryAccountResourceGroup` unless they
+are the same. The helper requires both names explicitly; it does not read secrets from
+`my.bicepparam`. To find the resource group in the current subscription:
+
+```powershell
+az network application-gateway list --query "[].{Name:name,ResourceGroup:resourceGroup,State:operationalState}" --output table
+```
+
+The helper uses your current Azure CLI subscription. Add `-SubscriptionId '<gateway-subscription-id>'`
+to target another subscription without changing the CLI default. It supports `-Confirm`, skips
+operations when the gateway is already in the requested state, and returns the gateway name,
+resource group, operational state, and provisioning state. Operations can take several minutes;
+the helper waits and verifies the resulting operational state. This does not verify backend health.
+If the gateway is already starting or stopping, wait for that operation to finish and retry.
+
+**Stopping interrupts all gateway traffic until you start it again.** This does not stop APIM,
+Foundry, or other supporting resources, which can continue to incur charges.
+
 ## Troubleshooting
 
 | Symptom | Check or fix |
 | --- | --- |
 | Application Gateway missing | Check the deployed `deployAppGateway` value, especially in older parameter files |
+| Application Gateway stopped | Use the [start/stop helper](#start-or-stop-application-gateway) with `-Action Start` |
 | HTTPS stays disabled after adding a PFX | Remove an explicit `appGwEnableHttps = false`; supply both PFX parameters and redeploy |
 | Gateway secret validation fails | Set `appGwSharedSecret` to a stable random value of at least 32 characters |
 | `403 gateway_required` | Use the gateway's HTTPS hostname, not APIM. If already using it, check the gateway secret |
