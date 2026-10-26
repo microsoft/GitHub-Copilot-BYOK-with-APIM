@@ -6,6 +6,9 @@ param location string = resourceGroup().location
 @description('Name of the Application Gateway.')
 param appGwName string
 
+@description('Existing NSG in this resource group. Empty creates <appGwName>-nsg; nonempty preserves the existing NSG and manages only the application client rule.')
+param existingNsgName string = ''
+
 @description('Name of the VNet created for the Application Gateway.')
 param vnetName string = '${appGwName}-vnet'
 
@@ -247,6 +250,18 @@ resource publicIp 'Microsoft.Network/publicIPAddresses@2022-07-01' = {
   }
 }
 
+module networkSecurityGroup 'app-gateway-nsg.bicep' = {
+  name: 'appGatewayNsg'
+  params: {
+    location: location
+    nsgName: empty(existingNsgName) ? '${appGwName}-nsg' : existingNsgName
+    reuseExisting: !empty(existingNsgName)
+    subnetAddressPrefix: subnetAddressPrefix
+    enableHttps: enableHttps
+    tags: tags
+  }
+}
+
 resource vnet 'Microsoft.Network/virtualNetworks@2023-11-01' = {
   name: vnetName
   location: location
@@ -262,6 +277,9 @@ resource vnet 'Microsoft.Network/virtualNetworks@2023-11-01' = {
         name: subnetName
         properties: {
           addressPrefix: subnetAddressPrefix
+          networkSecurityGroup: {
+            id: networkSecurityGroup.outputs.networkSecurityGroupId
+          }
         }
       }
     ]
@@ -381,3 +399,4 @@ output publicIpAddress string = publicIp.properties.ipAddress
 output frontendUrl string = 'http://${publicIp.properties.ipAddress}'
 output httpsEnabled bool = enableHttps
 output appGatewayName string = appGateway.name
+output networkSecurityGroupId string = networkSecurityGroup.outputs.networkSecurityGroupId

@@ -101,3 +101,84 @@ See [Using your LLM provider API keys with Copilot](https://docs.github.com/en/c
    `temperature: 0.1`, add its deployment id to `defaultTemperatureModelIds` and redeploy. APIM
    rewrites client-supplied temperatures to `1` only for those Chat Completions models.
 - **Use a least-privilege key.** Here that is the per-org client key, not a backend Foundry key.
+- **Agent requests need context capacity.** Model discovery and a small direct prompt can work
+  while fixed instructions and enabled tools exceed the client's model budget. If diagnostics
+  report that static context exceeds the usable budget, reduce unnecessary tools/instructions
+  or select a larger-context model. See [client context troubleshooting](traffic-flow.md#5-direct-inference-works-but-copilot-still-reports-no-response).
+
+## Context windows and client token budgets
+
+Application Gateway and APIM do not increase a model's context capacity. The effective
+budget also depends on the limits advertised to the client. An enterprise-managed model's
+picker name and underlying deployment name can differ, and a larger backend model does
+not help if the client still advertises the same smaller prompt budget.
+
+For an **individually configured VS Code Custom Endpoint**, the model entry in
+`chatLanguageModels.json` supports `contextWindow` (input plus output) and
+`maxOutputTokens`. When `maxInputTokens` is omitted, VS Code derives it as
+`contextWindow - maxOutputTokens`. For example, these token properties reserve 8,192
+output tokens within a verified 128,000-token model window:
+
+```json
+{
+  "contextWindow": 128000,
+  "maxOutputTokens": 8192
+}
+```
+
+Merge these properties into the appropriate Custom Endpoint model entry, retaining its
+ID, URL, and other settings. This allows at most 119,808 input tokens; the client may
+reserve additional headroom. Verify the selected deployment's real limits first.
+Do not remove a limit or advertise a larger window than the backend supports.
+
+These fields apply to that local Custom Endpoint entry, **not** an enterprise-managed
+Copilot model or another agent provider's catalog. Do not assume a local edit overrides
+limits shown for an enterprise-managed model. Check the limits actually reported by the
+client and whether its provider exposes a supported configuration control.
+
+For **standalone Copilot CLI with a locally configured BYOK provider**, GitHub documents
+`COPILOT_PROVIDER_MODEL_ID` for identifying model capabilities, and optional
+`COPILOT_PROVIDER_MAX_PROMPT_TOKENS` / `COPILOT_PROVIDER_MAX_OUTPUT_TOKENS` overrides.
+For the same verified 128,000-token window and 8,192-token output allocation:
+
+```powershell
+$env:COPILOT_PROVIDER_MAX_PROMPT_TOKENS = '119808'
+$env:COPILOT_PROVIDER_MAX_OUTPUT_TOKENS = '8192'
+```
+
+These are additional settings for the direct-provider configuration above, not a
+verified override for enterprise-managed models in the Insiders CLI-backed agent.
+Raising the declared budget may still be insufficient if fixed tools/instructions
+exceed it; use a genuinely larger-context model/provider configuration or reduce
+optional static context.
+
+References: [VS Code Custom Endpoint configuration](https://code.visualstudio.com/docs/agent-customization/language-models#_custom-endpoint-configuration-reference)
+and [Copilot CLI BYOK configuration](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/use-byok-models).
+
+## Insiders client-engine verification
+
+VS Code Insiders can offer both standard local Copilot Chat and a CLI-backed Agent Host.
+They are different client engines, even when the picker shows the same enterprise model.
+If direct inference works but the CLI-backed session fails, compare the same model in a
+new standard local chat before changing Azure or model limits.
+
+A separate `.code-workspace` file can open the same repository with these workspace-only
+settings, without copying code or changing global preferences:
+
+```json
+{
+  "chat.editor.preferCopilotHarness": false,
+  "chat.defaultToCopilotHarness": false,
+  "chat.editor.localAgent.enabled": true
+}
+```
+
+These are experimental engine-selection settings, not context-window settings. Check
+their descriptions in the installed Insiders build, and create a **new** chat rather
+than resuming an existing CLI-backed session. This is a diagnostic/workaround path, not
+a claim that an underlying CLI-backed client defect has been fixed.
+
+If that comparison exposes a concrete upstream request error instead, fix the API
+compatibility issue. For example, the current gateway normalizes legacy `max_tokens`
+automatically for all models using the Foundry OpenAI chat contract; no model-name
+exception list is required. See [chat request compatibility](traffic-flow.md#chat-request-parameter-compatibility).

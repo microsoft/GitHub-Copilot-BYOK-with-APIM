@@ -143,6 +143,7 @@ For GitHub's instructions, see
 | [Let's Encrypt certificate](docs/lets-encrypt.md) | Obtain a full-chain PFX with PowerShell and manual DNS validation |
 | [Deployment parameters](docs/parameters.md) | Look up every parameter, default, dependency, and cost implication |
 | [Traffic flow and WAF placement](docs/traffic-flow.md) | Follow a request and troubleshoot connection or authorization failures |
+| [Post-start network troubleshooting](docs/traffic-flow.md#healthy-backend-but-public-connections-fail) | Diagnose a healthy backend with failing public requests and safely repair an existing NSG |
 | [Client configuration](docs/client-surfaces.md) | Set up VS Code, Copilot CLI, or enterprise BYOK |
 | [AI Gateway capabilities](docs/ai-gateway.md) | Enable token governance, metrics, content safety, caching, or backend resilience |
 | [Reference architecture](docs/reference-architecture.md) | Understand the design, policies, and deployment parameters |
@@ -152,6 +153,9 @@ For offline infrastructure checks, run `pwsh -File tests/deployment-contract.ps1
 ([test script](tests/deployment-contract.ps1)); requires Bicep CLI and does not deploy resources.
 For offline start/stop helper checks, run `pwsh -File tests/app-gateway-helper.ps1`
 ([helper tests](tests/app-gateway-helper.ps1)); requires PowerShell 7.2+ and mocks Azure CLI.
+For executable request-compatibility checks, run `pwsh -File tests/chat-request-compatibility.ps1`
+([policy tests](tests/chat-request-compatibility.ps1)); requires PowerShell 7.2+ and executes
+the production policy expression without Azure access or additional packages.
 
 ## Further reading
 

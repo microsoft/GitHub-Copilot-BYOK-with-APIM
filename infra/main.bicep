@@ -212,6 +212,9 @@ param deployAppGateway bool = true
 @description('Application Gateway name. Defaults to <apimName>-appgw.')
 param appGwName string = '${apimName}-appgw'
 
+@description('Existing Application Gateway subnet NSG in this resource group. Empty creates <appGwName>-nsg. Set this before upgrading a deployment with a governance-owned NSG; only its application client rule is managed.')
+param appGwExistingNsgName string = ''
+
 @description('Shared secret injected by Application Gateway and validated by APIM. Required when deployAppGateway is true; use at least 32 characters. Generate once and reuse on redeployment.')
 @secure()
 param appGwSharedSecret string = ''
@@ -597,7 +600,11 @@ resource orgChatCompletionsPolicies 'Microsoft.ApiManagement/service/apis/operat
     name: 'policy'
     properties: {
       format: 'xml'
-      value: replace(replace(replace(replace(chatCompletionsPolicyXml, '__AI_CONTENT_SAFETY__', orgContentSafetyXml[i]), '__AI_CACHE_LOOKUP__', orgCacheLookupXml[i]), '__AI_TOKEN_GOVERNANCE__', orgTokenGovernanceXml[i]), '__AI_CACHE_STORE__', orgCacheStoreXml[i])
+      value: replace(
+        replace(replace(replace(replace(chatCompletionsPolicyXml, '__AI_CONTENT_SAFETY__', orgContentSafetyXml[i]), '__AI_CACHE_LOOKUP__', orgCacheLookupXml[i]), '__AI_TOKEN_GOVERNANCE__', orgTokenGovernanceXml[i]), '__AI_CACHE_STORE__', orgCacheStoreXml[i]),
+        '__NORMALIZE_OPENAI_TOKEN_LIMITS__',
+        contains(cohereOrgs, org) || contains(mcOrgs, org) ? 'false' : 'true'
+      )
     }
     dependsOn: [
       orgApiPolicies
@@ -800,6 +807,7 @@ module appGateway 'modules/app-gateway.bicep' = if (deployAppGateway) {
   params: {
     location: location
     appGwName: appGwName
+    existingNsgName: appGwExistingNsgName
     apimGatewayHost: '${apimName}.azure-api.net'
     sharedSecret: validatedAppGwSharedSecret
     wafMode: appGwWafMode
@@ -825,6 +833,7 @@ output orgProxyBasePaths array = [
 output backendCompletionUrl string = '${normalizedFoundryBackendBaseUrl}/openai/v1/chat/completions?api-version=${foundryApiVersion}'
 output appGatewayPublicIp string = deployAppGateway ? appGateway!.outputs.publicIpAddress : ''
 output appGatewayFrontendUrl string = deployAppGateway ? appGateway!.outputs.frontendUrl : ''
+output appGatewayNetworkSecurityGroupId string = deployAppGateway ? appGateway!.outputs.networkSecurityGroupId : ''
 output applicationInsightsName string = deployObservability ? observability!.outputs.appInsightsName : ''
 output deploymentSummary object = {
   applicationGatewayEnabled: deployAppGateway

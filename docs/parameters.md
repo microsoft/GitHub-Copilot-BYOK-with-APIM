@@ -96,6 +96,7 @@ connecting Copilot or sending keys. An explicit `appGwEnableHttps = false` overr
 | --- | --- | --- | --- |
 | `deployAppGateway` | bool | `true` | Deploy the WAF gateway and enforce its secret header in APIM. Set `false` explicitly for APIM-only operation without WAF. |
 | `appGwName` | string | `'${apimName}-appgw'` | Gateway name; preserve an existing override when upgrading. |
+| `appGwExistingNsgName` | string | `''` | Existing gateway subnet NSG in the deployment resource group. Empty creates and owns `<appGwName>-nsg`; nonempty preserves that NSG and updates only `AllowByokClientIngress`. Set before upgrading a governance-managed deployment. |
 | `appGwSharedSecret` | secure string | `''` | Required when the gateway is enabled; at least 32 characters. Generate separately from org keys and retain for redeployments. |
 | `appGwWafMode` | string | `'Detection'` | `Detection` records matches without blocking. Tune coding-prompt false positives before using `Prevention`. |
 | `appGwCapacity` | int | `1` | WAF_v2 instance count; minimum `1`. More instances increase cost. |
@@ -103,6 +104,19 @@ connecting Copilot or sending keys. An explicit `appGwEnableHttps = false` overr
 | `appGwHttpsPfxBase64` | secure string | `''` | Base64-encoded, full-chain PFX for the public hostname. Supplying it enables HTTPS by default. |
 | `appGwHttpsPfxPassword` | secure string | `''` | Password for the PFX; required when HTTPS is enabled. |
 | `appGwAllowedClientIp` | string | `''` | Optional APIM IP filter, usually the gateway's public IP after the first deployment. Empty means the gateway-secret check alone. |
+
+The gateway NSG allows public TCP 80, plus 443 when HTTPS is enabled. Port 80 becomes a
+redirect once HTTPS is enabled; never send credentials over HTTP. New NSGs also allow
+GatewayManager TCP 65200-65535 and retain Azure's default rules. Existing-NSG mode does
+not change management rules, tags, or other rules; validate those requirements separately.
+The application client rule reserves inbound priority 1000. Resolve any name or priority
+collision with the NSG owner before deployment; do not overwrite an unrelated rule.
+
+Output `appGatewayNetworkSecurityGroupId` identifies the selected NSG, or is empty in
+APIM-only mode. A repository-owned NSG's complete custom rule collection is managed by
+the template. Use existing-NSG mode for externally governed rules, and arrange approved
+rule retention with governance automation. IaC does not prevent another controller
+from changing the NSG later.
 
 Follow [HTTPS setup](getting-started.md#production-enable-https-on-the-app-gateway) and
 [traffic-flow troubleshooting](traffic-flow.md#common-failure-points) for verification.

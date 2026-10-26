@@ -19,6 +19,10 @@ param appGwSharedSecret = '<gateway-secret>'
 // Recommended setup: Application Gateway + WAF. Set false only for APIM-only deployments.
 param deployAppGateway = true
 
+// New deployments create <appGwName>-nsg. To preserve a governance-owned NSG in this
+// resource group, set its existing name before redeploying. Only the client rule is managed.
+// param appGwExistingNsgName = 'your-existing-appgw-nsg'
+
 // Inferred: orgs from orgKeys, appGwName from apimName, and the standard Foundry endpoint
 // from foundryAccountName. Uncomment only for a nonstandard Foundry endpoint:
 // param foundryBackendBaseUrl = 'https://your-custom-endpoint'

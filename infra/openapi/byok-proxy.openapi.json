@@ -72,6 +72,17 @@
                   },
                   "temperature": {
                     "type": "number"
+                  },
+                  "max_completion_tokens": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Maximum completion-token budget for the Foundry OpenAI backend."
+                  },
+                  "max_tokens": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "deprecated": true,
+                    "description": "Legacy output-token limit. For the Foundry OpenAI backend, normalized to max_completion_tokens without changing the value. An explicit max_completion_tokens takes precedence. Alternate managed-compute backends retain their legacy request contract."
                   }
                 },
                 "required": [

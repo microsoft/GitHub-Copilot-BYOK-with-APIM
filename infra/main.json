@@ -4,8 +4,8 @@
   "metadata": {
     "_generator": {
       "name": "bicep",
-      "version": "0.47.16.16243",
-      "templateHash": "1645300047849570450"
+      "version": "0.38.33.27573",
+      "templateHash": "6677116549446083760"
     }
   },
   "parameters": {
@@ -456,6 +456,13 @@
         "description": "Application Gateway name. Defaults to <apimName>-appgw."
       }
     },
+    "appGwExistingNsgName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Existing Application Gateway subnet NSG in this resource group. Empty creates <appGwName>-nsg. Set this before upgrading a deployment with a governance-owned NSG; only its application client rule is managed."
+      }
+    },
     "appGwSharedSecret": {
       "type": "securestring",
       "defaultValue": "",
@@ -589,7 +596,7 @@
       }
     ],
     "$fxv#0": "<policies>\r\n  <inbound>\r\n    <base />\r\n    <!-- Account-level (OpenAI-format) deployments. Reliable, cognitiveservices audience. -->\r\n    <send-request mode=\"new\" response-variable-name=\"acctDeployments\" timeout=\"20\" ignore-error=\"true\">\r\n      <set-url>{{foundryDeploymentsUrl}}</set-url>\r\n      <set-method>GET</set-method>\r\n      <authentication-managed-identity resource=\"https://cognitiveservices.azure.com\" />\r\n    </send-request>\r\n    <!-- Project deployments (AI Foundry data plane). Adds managed-compute models that do not\r\n         appear in the account listing. Skipped when no project is configured. -->\r\n    <choose>\r\n      <when condition=\"@(!&quot;{{foundryProjectDeploymentsUrl}}&quot;.Equals(&quot;https://disabled.invalid&quot;, StringComparison.OrdinalIgnoreCase))\">\r\n        <send-request mode=\"new\" response-variable-name=\"projDeployments\" timeout=\"20\" ignore-error=\"true\">\r\n          <set-url>{{foundryProjectDeploymentsUrl}}</set-url>\r\n          <set-method>GET</set-method>\r\n          <authentication-managed-identity resource=\"https://ai.azure.com\" />\r\n        </send-request>\r\n      </when>\r\n    </choose>\r\n    <choose>\r\n      <when condition=\"@((context.Variables.ContainsKey(&quot;acctDeployments&quot;) &amp;&amp; ((IResponse)context.Variables[&quot;acctDeployments&quot;]).StatusCode == 200) || (context.Variables.ContainsKey(&quot;projDeployments&quot;) &amp;&amp; ((IResponse)context.Variables[&quot;projDeployments&quot;]).StatusCode == 200))\">\r\n        <return-response>\r\n          <set-status code=\"200\" reason=\"OK\" />\r\n          <set-header name=\"Content-Type\" exists-action=\"override\">\r\n            <value>application/json</value>\r\n          </set-header>\r\n          <set-body><![CDATA[@{\r\n              var created = DateTimeOffset.UtcNow.ToUnixTimeSeconds();\r\n              var data = new JArray();\r\n              var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);\r\n              var allow = new HashSet<string>(StringComparer.OrdinalIgnoreCase);\r\n              foreach (var a in \"__ALLOWED_MODELS_CSV__\".Split(new char[]{','}, StringSplitOptions.RemoveEmptyEntries)) { var t = a.Trim(); if (t.Length > 0) { allow.Add(t); } }\r\n              if (context.Variables.ContainsKey(\"acctDeployments\")) {\r\n                  var r = (IResponse)context.Variables[\"acctDeployments\"];\r\n                  if (r.StatusCode == 200) {\r\n                      var arr = r.Body.As<JObject>(preserveContent: true)[\"data\"] as JArray ?? new JArray();\r\n                      foreach (var d in arr) {\r\n                          var id = (string)d[\"id\"];\r\n                          if (!string.IsNullOrWhiteSpace(id) && (allow.Count == 0 || allow.Contains(id)) && seen.Add(id)) {\r\n                              data.Add(new JObject {\r\n                                  [\"id\"] = id,\r\n                                  [\"object\"] = \"model\",\r\n                                  [\"created\"] = created,\r\n                                  [\"owned_by\"] = (string)(d[\"owned_by\"] ?? d[\"owner\"]) ?? \"azure-openai\"\r\n                              });\r\n                          }\r\n                      }\r\n                  }\r\n              }\r\n              if (context.Variables.ContainsKey(\"projDeployments\")) {\r\n                  var r = (IResponse)context.Variables[\"projDeployments\"];\r\n                  if (r.StatusCode == 200) {\r\n                      var arr = r.Body.As<JObject>(preserveContent: true)[\"value\"] as JArray ?? new JArray();\r\n                      foreach (var d in arr) {\r\n                          var id = (string)d[\"name\"];\r\n                          if (!string.IsNullOrWhiteSpace(id) && (allow.Count == 0 || allow.Contains(id)) && seen.Add(id)) {\r\n                              data.Add(new JObject {\r\n                                  [\"id\"] = id,\r\n                                  [\"object\"] = \"model\",\r\n                                  [\"created\"] = created,\r\n                                  [\"owned_by\"] = \"azure-foundry\"\r\n                              });\r\n                          }\r\n                      }\r\n                  }\r\n              }\r\n              foreach (var em in new string[] { __EXTRA_MODELS_JSON__ }) {\r\n                  if (!string.IsNullOrWhiteSpace(em) && (allow.Count == 0 || allow.Contains(em)) && seen.Add(em)) {\r\n                      data.Add(new JObject {\r\n                          [\"id\"] = em,\r\n                          [\"object\"] = \"model\",\r\n                          [\"created\"] = created,\r\n                          [\"owned_by\"] = \"azure-ml\"\r\n                      });\r\n                  }\r\n              }\r\n              return new JObject {\r\n                  [\"object\"] = \"list\",\r\n                  [\"data\"] = data\r\n              }.ToString();\r\n          }]]></set-body>\r\n        </return-response>\r\n      </when>\r\n      <otherwise>\r\n        <return-response>\r\n          <set-status code=\"502\" reason=\"Bad Gateway\" />\r\n          <set-header name=\"Content-Type\" exists-action=\"override\">\r\n            <value>application/json</value>\r\n          </set-header>\r\n          <set-body><![CDATA[@{\r\n              var status = context.Variables.ContainsKey(\"acctDeployments\")\r\n                  ? ((IResponse)context.Variables[\"acctDeployments\"]).StatusCode.ToString()\r\n                  : \"no response\";\r\n              return new JObject {\r\n                  [\"error\"] = new JObject {\r\n                      [\"message\"] = \"Failed to list Foundry deployments (upstream status: \" + status + \").\",\r\n                      [\"type\"] = \"api_error\",\r\n                      [\"code\"] = \"deployments_unavailable\"\r\n                  }\r\n              }.ToString();\r\n          }]]></set-body>\r\n        </return-response>\r\n      </otherwise>\r\n    </choose>\r\n  </inbound>\r\n  <backend>\r\n    <base />\r\n  </backend>\r\n  <outbound>\r\n    <base />\r\n  </outbound>\r\n  <on-error>\r\n    <base />\r\n  </on-error>\r\n</policies>\r\n",
-    "$fxv#1": "<policies>\r\n  <inbound>\r\n    <base />\r\n    __AI_CONTENT_SAFETY__\r\n    __AI_CACHE_LOOKUP__\r\n    __AI_TOKEN_GOVERNANCE__\r\n    <set-body><![CDATA[@{\r\n        var body = context.Request.Body.As<JObject>(preserveContent: true);\r\n\r\n        var model = (string)body[\"model\"];\r\n        var defaultTemperatureModels = new string[] { __DEFAULT_TEMPERATURE_MODELS_JSON__ };\r\n        var requiresDefaultTemperature = false;\r\n        foreach (var modelId in defaultTemperatureModels)\r\n        {\r\n          if (String.Equals(model, modelId, StringComparison.OrdinalIgnoreCase))\r\n          {\r\n            requiresDefaultTemperature = true;\r\n            break;\r\n          }\r\n        }\r\n\r\n        if (requiresDefaultTemperature && body[\"temperature\"] != null)\r\n        {\r\n          body[\"temperature\"] = 1;\r\n        }\r\n\r\n        var tools = body[\"tools\"] as JArray;\r\n        if (tools != null)\r\n        {\r\n            foreach (var tool in tools)\r\n            {\r\n                var fn = tool?[\"function\"] as JObject;\r\n                if (fn != null)\r\n                {\r\n                    var strictToken = fn[\"strict\"];\r\n                    if (strictToken == null || strictToken.Type == JTokenType.Null)\r\n                    {\r\n                        fn[\"strict\"] = false;\r\n                    }\r\n                }\r\n            }\r\n        }\r\n\r\n        return body.ToString();\r\n    }]]></set-body>\r\n  </inbound>\r\n  <backend>\r\n    <base />\r\n  </backend>\r\n  <outbound>\r\n    __AI_CACHE_STORE__\r\n    <base />\r\n  </outbound>\r\n  <on-error>\r\n    <base />\r\n  </on-error>\r\n</policies>\r\n",
+    "$fxv#1": "<policies>\r\n  <inbound>\r\n    <base />\r\n    __AI_CONTENT_SAFETY__\r\n    __AI_CACHE_LOOKUP__\r\n    __AI_TOKEN_GOVERNANCE__\r\n    <set-body><![CDATA[@{\r\n        var body = context.Request.Body.As<JObject>(preserveContent: true);\r\n\r\n        var useOpenAiTokenLimit = __NORMALIZE_OPENAI_TOKEN_LIMITS__;\r\n        var legacyMaxTokens = body[\"max_tokens\"];\r\n        if (useOpenAiTokenLimit && legacyMaxTokens != null)\r\n        {\r\n            var maxCompletionTokens = body[\"max_completion_tokens\"];\r\n            if (maxCompletionTokens == null || maxCompletionTokens.Type == JTokenType.Null)\r\n            {\r\n                body[\"max_completion_tokens\"] = legacyMaxTokens;\r\n            }\r\n            body.Remove(\"max_tokens\");\r\n        }\r\n\r\n        var model = (string)body[\"model\"];\r\n        var defaultTemperatureModels = new string[] { __DEFAULT_TEMPERATURE_MODELS_JSON__ };\r\n        var requiresDefaultTemperature = false;\r\n        foreach (var modelId in defaultTemperatureModels)\r\n        {\r\n          if (String.Equals(model, modelId, StringComparison.OrdinalIgnoreCase))\r\n          {\r\n            requiresDefaultTemperature = true;\r\n            break;\r\n          }\r\n        }\r\n\r\n        if (requiresDefaultTemperature && body[\"temperature\"] != null)\r\n        {\r\n          body[\"temperature\"] = 1;\r\n        }\r\n\r\n        var tools = body[\"tools\"] as JArray;\r\n        if (tools != null)\r\n        {\r\n            foreach (var tool in tools)\r\n            {\r\n                var fn = tool?[\"function\"] as JObject;\r\n                if (fn != null)\r\n                {\r\n                    var strictToken = fn[\"strict\"];\r\n                    if (strictToken == null || strictToken.Type == JTokenType.Null)\r\n                    {\r\n                        fn[\"strict\"] = false;\r\n                    }\r\n                }\r\n            }\r\n        }\r\n\r\n        return body.ToString();\r\n    }]]></set-body>\r\n  </inbound>\r\n  <backend>\r\n    <base />\r\n  </backend>\r\n  <outbound>\r\n    __AI_CACHE_STORE__\r\n    <base />\r\n  </outbound>\r\n  <on-error>\r\n    <base />\r\n  </on-error>\r\n</policies>\r\n",
     "openApiPath": "openapi/byok-proxy.openapi.json",
     "policyTemplatePath": "policies/byok-proxy.xml",
     "modelsPolicyPath": "policies/models.xml",
@@ -600,7 +607,7 @@
     "backendId": "foundry-backend",
     "cohereBackendId": "cohere-backend",
     "mcBackendId": "managed-compute-backend",
-    "openApiSpec": "{\r\n  \"openapi\": \"3.0.3\",\r\n  \"info\": {\r\n    \"title\": \"BYOK Foundry Proxy\",\r\n    \"version\": \"1.0.0\",\r\n    \"description\": \"OpenAI-compatible proxy surface that APIM publishes to GHCP.\"\r\n  },\r\n  \"paths\": {\r\n    \"/models\": {\r\n      \"get\": {\r\n        \"operationId\": \"listModels\",\r\n        \"summary\": \"List the models available through the proxy\",\r\n        \"description\": \"Returns the Foundry deployments on the backend account in OpenAI list-models format. The deployment id is the value clients pass as `model`.\",\r\n        \"responses\": {\r\n          \"200\": {\r\n            \"description\": \"An OpenAI-compatible list of available models\",\r\n            \"content\": {\r\n              \"application/json\": {\r\n                \"schema\": {\r\n                  \"type\": \"object\",\r\n                  \"properties\": {\r\n                    \"object\": {\r\n                      \"type\": \"string\"\r\n                    },\r\n                    \"data\": {\r\n                      \"type\": \"array\",\r\n                      \"items\": {\r\n                        \"type\": \"object\",\r\n                        \"properties\": {\r\n                          \"id\": {\r\n                            \"type\": \"string\"\r\n                          },\r\n                          \"object\": {\r\n                            \"type\": \"string\"\r\n                          },\r\n                          \"created\": {\r\n                            \"type\": \"integer\"\r\n                          },\r\n                          \"owned_by\": {\r\n                            \"type\": \"string\"\r\n                          }\r\n                        }\r\n                      }\r\n                    }\r\n                  }\r\n                }\r\n              }\r\n            }\r\n          }\r\n        }\r\n      }\r\n    },\r\n    \"/chat/completions\": {\r\n      \"post\": {\r\n        \"operationId\": \"createChatCompletion\",\r\n        \"summary\": \"Proxy a chat completion request\",\r\n        \"requestBody\": {\r\n          \"required\": true,\r\n          \"content\": {\r\n            \"application/json\": {\r\n              \"schema\": {\r\n                \"type\": \"object\",\r\n                \"properties\": {\r\n                  \"messages\": {\r\n                    \"type\": \"array\",\r\n                    \"items\": {\r\n                      \"type\": \"object\"\r\n                    }\r\n                  },\r\n                  \"model\": {\r\n                    \"type\": \"string\"\r\n                  },\r\n                  \"temperature\": {\r\n                    \"type\": \"number\"\r\n                  }\r\n                },\r\n                \"required\": [\r\n                  \"messages\"\r\n                ]\r\n              }\r\n            }\r\n          }\r\n        },\r\n        \"responses\": {\r\n          \"200\": {\r\n            \"description\": \"A successful completion response\",\r\n            \"content\": {\r\n              \"application/json\": {\r\n                \"schema\": {\r\n                  \"type\": \"object\"\r\n                }\r\n              }\r\n            }\r\n          }\r\n        }\r\n      }\r\n    },\r\n    \"/responses\": {\r\n      \"post\": {\r\n        \"operationId\": \"createResponse\",\r\n        \"summary\": \"Proxy a Responses API request\",\r\n        \"description\": \"OpenAI Responses API — used by newer Copilot models instead of /chat/completions. The request body is forwarded as-is to the Foundry backend at /openai/v1/responses.\",\r\n        \"requestBody\": {\r\n          \"required\": true,\r\n          \"content\": {\r\n            \"application/json\": {\r\n              \"schema\": {\r\n                \"type\": \"object\",\r\n                \"properties\": {\r\n                  \"model\": {\r\n                    \"type\": \"string\",\r\n                    \"description\": \"The Foundry deployment name to target.\"\r\n                  },\r\n                  \"input\": {\r\n                    \"description\": \"Text prompt or array of input items.\",\r\n                    \"oneOf\": [\r\n                      { \"type\": \"string\" },\r\n                      { \"type\": \"array\", \"items\": { \"type\": \"object\" } }\r\n                    ]\r\n                  },\r\n                  \"instructions\": {\r\n                    \"type\": \"string\",\r\n                    \"description\": \"System-level instructions (equivalent to a system message).\"\r\n                  },\r\n                  \"tools\": {\r\n                    \"type\": \"array\",\r\n                    \"items\": { \"type\": \"object\" }\r\n                  },\r\n                  \"stream\": {\r\n                    \"type\": \"boolean\"\r\n                  }\r\n                },\r\n                \"required\": [\r\n                  \"model\",\r\n                  \"input\"\r\n                ]\r\n              }\r\n            }\r\n          }\r\n        },\r\n        \"responses\": {\r\n          \"200\": {\r\n            \"description\": \"A successful Responses API response\",\r\n            \"content\": {\r\n              \"application/json\": {\r\n                \"schema\": {\r\n                  \"type\": \"object\"\r\n                }\r\n              },\r\n              \"text/event-stream\": {\r\n                \"schema\": {\r\n                  \"type\": \"string\"\r\n                }\r\n              }\r\n            }\r\n          }\r\n        }\r\n      }\r\n    }\r\n  }\r\n}\r\n",
+    "openApiSpec": "{\r\n  \"openapi\": \"3.0.3\",\r\n  \"info\": {\r\n    \"title\": \"BYOK Foundry Proxy\",\r\n    \"version\": \"1.0.0\",\r\n    \"description\": \"OpenAI-compatible proxy surface that APIM publishes to GHCP.\"\r\n  },\r\n  \"paths\": {\r\n    \"/models\": {\r\n      \"get\": {\r\n        \"operationId\": \"listModels\",\r\n        \"summary\": \"List the models available through the proxy\",\r\n        \"description\": \"Returns the Foundry deployments on the backend account in OpenAI list-models format. The deployment id is the value clients pass as `model`.\",\r\n        \"responses\": {\r\n          \"200\": {\r\n            \"description\": \"An OpenAI-compatible list of available models\",\r\n            \"content\": {\r\n              \"application/json\": {\r\n                \"schema\": {\r\n                  \"type\": \"object\",\r\n                  \"properties\": {\r\n                    \"object\": {\r\n                      \"type\": \"string\"\r\n                    },\r\n                    \"data\": {\r\n                      \"type\": \"array\",\r\n                      \"items\": {\r\n                        \"type\": \"object\",\r\n                        \"properties\": {\r\n                          \"id\": {\r\n                            \"type\": \"string\"\r\n                          },\r\n                          \"object\": {\r\n                            \"type\": \"string\"\r\n                          },\r\n                          \"created\": {\r\n                            \"type\": \"integer\"\r\n                          },\r\n                          \"owned_by\": {\r\n                            \"type\": \"string\"\r\n                          }\r\n                        }\r\n                      }\r\n                    }\r\n                  }\r\n                }\r\n              }\r\n            }\r\n          }\r\n        }\r\n      }\r\n    },\r\n    \"/chat/completions\": {\r\n      \"post\": {\r\n        \"operationId\": \"createChatCompletion\",\r\n        \"summary\": \"Proxy a chat completion request\",\r\n        \"requestBody\": {\r\n          \"required\": true,\r\n          \"content\": {\r\n            \"application/json\": {\r\n              \"schema\": {\r\n                \"type\": \"object\",\r\n                \"properties\": {\r\n                  \"messages\": {\r\n                    \"type\": \"array\",\r\n                    \"items\": {\r\n                      \"type\": \"object\"\r\n                    }\r\n                  },\r\n                  \"model\": {\r\n                    \"type\": \"string\"\r\n                  },\r\n                  \"temperature\": {\r\n                    \"type\": \"number\"\r\n                  },\r\n                  \"max_completion_tokens\": {\r\n                    \"type\": \"integer\",\r\n                    \"minimum\": 1,\r\n                    \"description\": \"Maximum completion-token budget for the Foundry OpenAI backend.\"\r\n                  },\r\n                  \"max_tokens\": {\r\n                    \"type\": \"integer\",\r\n                    \"minimum\": 1,\r\n                    \"deprecated\": true,\r\n                    \"description\": \"Legacy output-token limit. For the Foundry OpenAI backend, normalized to max_completion_tokens without changing the value. An explicit max_completion_tokens takes precedence. Alternate managed-compute backends retain their legacy request contract.\"\r\n                  }\r\n                },\r\n                \"required\": [\r\n                  \"messages\"\r\n                ]\r\n              }\r\n            }\r\n          }\r\n        },\r\n        \"responses\": {\r\n          \"200\": {\r\n            \"description\": \"A successful completion response\",\r\n            \"content\": {\r\n              \"application/json\": {\r\n                \"schema\": {\r\n                  \"type\": \"object\"\r\n                }\r\n              }\r\n            }\r\n          }\r\n        }\r\n      }\r\n    },\r\n    \"/responses\": {\r\n      \"post\": {\r\n        \"operationId\": \"createResponse\",\r\n        \"summary\": \"Proxy a Responses API request\",\r\n        \"description\": \"OpenAI Responses API — used by newer Copilot models instead of /chat/completions. The request body is forwarded as-is to the Foundry backend at /openai/v1/responses.\",\r\n        \"requestBody\": {\r\n          \"required\": true,\r\n          \"content\": {\r\n            \"application/json\": {\r\n              \"schema\": {\r\n                \"type\": \"object\",\r\n                \"properties\": {\r\n                  \"model\": {\r\n                    \"type\": \"string\",\r\n                    \"description\": \"The Foundry deployment name to target.\"\r\n                  },\r\n                  \"input\": {\r\n                    \"description\": \"Text prompt or array of input items.\",\r\n                    \"oneOf\": [\r\n                      { \"type\": \"string\" },\r\n                      { \"type\": \"array\", \"items\": { \"type\": \"object\" } }\r\n                    ]\r\n                  },\r\n                  \"instructions\": {\r\n                    \"type\": \"string\",\r\n                    \"description\": \"System-level instructions (equivalent to a system message).\"\r\n                  },\r\n                  \"tools\": {\r\n                    \"type\": \"array\",\r\n                    \"items\": { \"type\": \"object\" }\r\n                  },\r\n                  \"stream\": {\r\n                    \"type\": \"boolean\"\r\n                  }\r\n                },\r\n                \"required\": [\r\n                  \"model\",\r\n                  \"input\"\r\n                ]\r\n              }\r\n            }\r\n          }\r\n        },\r\n        \"responses\": {\r\n          \"200\": {\r\n            \"description\": \"A successful Responses API response\",\r\n            \"content\": {\r\n              \"application/json\": {\r\n                \"schema\": {\r\n                  \"type\": \"object\"\r\n                }\r\n              },\r\n              \"text/event-stream\": {\r\n                \"schema\": {\r\n                  \"type\": \"string\"\r\n                }\r\n              }\r\n            }\r\n          }\r\n        }\r\n      }\r\n    }\r\n  }\r\n}\r\n",
     "policyTemplate": "<policies>\r\n  <inbound>\r\n    <base />\r\n    __APPGW_GUARD__\r\n    <!--\r\n      Per-org auth. This policy is templated per organization at deploy time:\r\n        __ORG_KEY_NV__  -> {{byokKey-<org>}}  (that org's secret named value)\r\n        __ORG_SLUG__    -> <org>              (the org slug, used for attribution + throttling)\r\n        __RATE_CALLS__ / __RATE_PERIOD__ -> per-org rate-limit-by-key settings\r\n      The presented key is bound to THIS org's path: a key issued to another org\r\n      fails the comparison here and is rejected with 401, so callers cannot shift\r\n      cost by repointing at a different /byok/<org> URL.\r\n    -->\r\n    <set-variable name=\"presentedKey\" value=\"@{\r\n        var auth = context.Request.Headers.GetValueOrDefault(&quot;Authorization&quot;, &quot;&quot;);\r\n        return auth.StartsWith(&quot;Bearer &quot;, StringComparison.OrdinalIgnoreCase)\r\n            ? auth.Substring(&quot;Bearer &quot;.Length).Trim()\r\n            : &quot;&quot;;\r\n    }\" />\r\n    <choose>\r\n      <when condition=\"@(string.IsNullOrEmpty((string)context.Variables[&quot;presentedKey&quot;]) || (string)context.Variables[&quot;presentedKey&quot;] != &quot;__ORG_KEY_NV__&quot;)\">\r\n        <return-response>\r\n          <set-status code=\"401\" reason=\"Unauthorized\" />\r\n          <set-header name=\"WWW-Authenticate\" exists-action=\"override\">\r\n            <value>Bearer error=\"invalid_token\"</value>\r\n          </set-header>\r\n          <set-header name=\"Content-Type\" exists-action=\"override\">\r\n            <value>application/json</value>\r\n          </set-header>\r\n          <set-body>{\"error\":{\"message\":\"Invalid or missing API key.\",\"type\":\"invalid_request_error\",\"code\":\"invalid_api_key\"}}</set-body>\r\n        </return-response>\r\n      </when>\r\n    </choose>\r\n    <set-variable name=\"byokOrg\" value=\"__ORG_SLUG__\" />\r\n    <!-- Capture the requested model once (POST only) for reuse by the allowlist and token metrics. -->\r\n    <set-variable name=\"byokModel\" value=\"@{\r\n        if (!context.Request.Method.Equals(&quot;POST&quot;, StringComparison.OrdinalIgnoreCase)) { return &quot;n/a&quot;; }\r\n        try { return (string)context.Request.Body.As&lt;JObject&gt;(preserveContent: true)[&quot;model&quot;] ?? &quot;unknown&quot;; } catch { return &quot;unknown&quot;; }\r\n    }\" />\r\n    <!-- Per-org throttling. counter-key is the org slug, so limits are isolated per organization. -->\r\n    <rate-limit-by-key calls=\"__RATE_CALLS__\" renewal-period=\"__RATE_PERIOD__\" counter-key=\"@((string)context.Variables[&quot;byokOrg&quot;])\" />\r\n    <!-- Attribution: surfaces the org as a dimension in API Inspector / Application Insights. -->\r\n    <trace source=\"byok\" severity=\"information\">\r\n      <message>@(\"byok org=\" + (string)context.Variables[\"byokOrg\"] + \" op=\" + context.Operation.Id)</message>\r\n      <metadata name=\"byokOrg\" value=\"@((string)context.Variables[&quot;byokOrg&quot;])\" />\r\n    </trace>\r\n    <!-- Per-org model allowlist. When __ALLOWED_MODELS_CSV__ is non-empty, POST requests\r\n         (chat/completions, responses) must name a permitted model or are rejected with 403.\r\n         Empty list = no restriction. GET /models carries no body and is skipped here; the\r\n         /models operation policy filters the advertised list to the same allowlist. -->\r\n    <choose>\r\n      <when condition=\"@{\r\n          var allow = new HashSet&lt;string&gt;(StringComparer.OrdinalIgnoreCase);\r\n          foreach (var a in &quot;__ALLOWED_MODELS_CSV__&quot;.Split(new char[]{','}, StringSplitOptions.RemoveEmptyEntries)) { var t = a.Trim(); if (t.Length &gt; 0) { allow.Add(t); } }\r\n          if (allow.Count == 0) { return false; }\r\n          if (context.Request.Method != &quot;POST&quot;) { return false; }\r\n          var model = (string)context.Variables[&quot;byokModel&quot;];\r\n          return string.IsNullOrEmpty(model) || !allow.Contains(model);\r\n      }\">\r\n        <return-response>\r\n          <set-status code=\"403\" reason=\"Forbidden\" />\r\n          <set-header name=\"Content-Type\" exists-action=\"override\">\r\n            <value>application/json</value>\r\n          </set-header>\r\n          <set-body>{\"error\":{\"message\":\"The requested model is not permitted for this organization.\",\"type\":\"invalid_request_error\",\"code\":\"model_not_allowed\"}}</set-body>\r\n        </return-response>\r\n      </when>\r\n    </choose>\r\n    <set-backend-service backend-id=\"__BACKEND_ID__\" />\r\n  </inbound>\r\n  <backend>\r\n    <base />\r\n  </backend>\r\n  <outbound>\r\n    <base />\r\n  </outbound>\r\n  <on-error>\r\n    <base />\r\n  </on-error>\r\n</policies>\r\n",
     "modelsPolicyXml": "[replace(variables('$fxv#0'), '__EXTRA_MODELS_JSON__', join(map(parameters('extraModelIds'), lambda('m', format('\"{0}\"', lambdaVariables('m')))), ', '))]",
     "defaultTemperatureModelIdsCsharp": "[join(map(parameters('defaultTemperatureModelIds'), lambda('m', format('\"{0}\"', lambdaVariables('m')))), ', ')]",
@@ -920,7 +927,7 @@
       "name": "[format('{0}/{1}/{2}/{3}', parameters('apimName'), format('byok-{0}', parameters('orgs')[copyIndex()]), 'createChatCompletion', 'policy')]",
       "properties": {
         "format": "xml",
-        "value": "[replace(replace(replace(replace(variables('chatCompletionsPolicyXml'), '__AI_CONTENT_SAFETY__', variables('orgContentSafetyXml')[copyIndex()]), '__AI_CACHE_LOOKUP__', variables('orgCacheLookupXml')[copyIndex()]), '__AI_TOKEN_GOVERNANCE__', variables('orgTokenGovernanceXml')[copyIndex()]), '__AI_CACHE_STORE__', variables('orgCacheStoreXml')[copyIndex()])]"
+        "value": "[replace(replace(replace(replace(replace(variables('chatCompletionsPolicyXml'), '__AI_CONTENT_SAFETY__', variables('orgContentSafetyXml')[copyIndex()]), '__AI_CACHE_LOOKUP__', variables('orgCacheLookupXml')[copyIndex()]), '__AI_TOKEN_GOVERNANCE__', variables('orgTokenGovernanceXml')[copyIndex()]), '__AI_CACHE_STORE__', variables('orgCacheStoreXml')[copyIndex()]), '__NORMALIZE_OPENAI_TOKEN_LIMITS__', if(or(contains(parameters('cohereOrgs'), parameters('orgs')[copyIndex()]), contains(parameters('mcOrgs'), parameters('orgs')[copyIndex()])), 'false', 'true'))]"
       },
       "dependsOn": [
         "[resourceId('Microsoft.ApiManagement/service/caches', parameters('apimName'), 'default')]",
@@ -1128,8 +1135,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.47.16.16243",
-              "templateHash": "593340396403243737"
+              "version": "0.38.33.27573",
+              "templateHash": "10904723434945620197"
             }
           },
           "parameters": {
@@ -1157,7 +1164,7 @@
             {
               "type": "Microsoft.Authorization/roleAssignments",
               "apiVersion": "2022-04-01",
-              "scope": "[resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryAccountName'))]",
+              "scope": "[format('Microsoft.CognitiveServices/accounts/{0}', parameters('foundryAccountName'))]",
               "name": "[guid(resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryAccountName')), parameters('apimPrincipalId'), 'foundry-user')]",
               "properties": {
                 "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', parameters('roleDefinitionId'))]",
@@ -1207,8 +1214,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.47.16.16243",
-              "templateHash": "16945444683608749666"
+              "version": "0.38.33.27573",
+              "templateHash": "6292842071664771867"
             }
           },
           "parameters": {
@@ -1298,7 +1305,7 @@
               "condition": "[and(parameters('grantMetricsPublisher'), not(empty(parameters('apimPrincipalId'))))]",
               "type": "Microsoft.Authorization/roleAssignments",
               "apiVersion": "2022-04-01",
-              "scope": "[resourceId('Microsoft.Insights/components', parameters('appInsightsName'))]",
+              "scope": "[format('Microsoft.Insights/components/{0}', parameters('appInsightsName'))]",
               "name": "[guid(resourceId('Microsoft.Insights/components', parameters('appInsightsName')), parameters('apimPrincipalId'), variables('monitoringMetricsPublisherRoleId'))]",
               "properties": {
                 "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('monitoringMetricsPublisherRoleId'))]",
@@ -1361,8 +1368,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.47.16.16243",
-              "templateHash": "8058337997477351971"
+              "version": "0.38.33.27573",
+              "templateHash": "2709797466680543998"
             }
           },
           "parameters": {
@@ -1419,7 +1426,7 @@
               "condition": "[not(empty(parameters('apimPrincipalId')))]",
               "type": "Microsoft.Authorization/roleAssignments",
               "apiVersion": "2022-04-01",
-              "scope": "[resourceId('Microsoft.CognitiveServices/accounts', parameters('contentSafetyName'))]",
+              "scope": "[format('Microsoft.CognitiveServices/accounts/{0}', parameters('contentSafetyName'))]",
               "name": "[guid(resourceId('Microsoft.CognitiveServices/accounts', parameters('contentSafetyName')), parameters('apimPrincipalId'), variables('cognitiveServicesUserRoleId'))]",
               "properties": {
                 "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('cognitiveServicesUserRoleId'))]",
@@ -1464,6 +1471,9 @@
           "appGwName": {
             "value": "[parameters('appGwName')]"
           },
+          "existingNsgName": {
+            "value": "[parameters('appGwExistingNsgName')]"
+          },
           "apimGatewayHost": {
             "value": "[format('{0}.azure-api.net', parameters('apimName'))]"
           },
@@ -1495,8 +1505,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.47.16.16243",
-              "templateHash": "16770453487983408468"
+              "version": "0.38.33.27573",
+              "templateHash": "4785042119829516216"
             }
           },
           "parameters": {
@@ -1511,6 +1521,13 @@
               "type": "string",
               "metadata": {
                 "description": "Name of the Application Gateway."
+              }
+            },
+            "existingNsgName": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Existing NSG in this resource group. Empty creates <appGwName>-nsg; nonempty preserves the existing NSG and manages only the application client rule."
               }
             },
             "vnetName": {
@@ -1762,11 +1779,17 @@
                   {
                     "name": "[parameters('subnetName')]",
                     "properties": {
-                      "addressPrefix": "[parameters('subnetAddressPrefix')]"
+                      "addressPrefix": "[parameters('subnetAddressPrefix')]",
+                      "networkSecurityGroup": {
+                        "id": "[reference(resourceId('Microsoft.Resources/deployments', 'appGatewayNsg'), '2025-04-01').outputs.networkSecurityGroupId.value]"
+                      }
                     }
                   }
                 ]
-              }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Resources/deployments', 'appGatewayNsg')]"
+              ]
             },
             {
               "type": "Microsoft.Network/applicationGateways",
@@ -1882,6 +1905,155 @@
                 "[resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName'))]",
                 "[resourceId('Microsoft.Network/ApplicationGatewayWebApplicationFirewallPolicies', format('{0}-waf', parameters('appGwName')))]"
               ]
+            },
+            {
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "appGatewayNsg",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "nsgName": "[if(empty(parameters('existingNsgName')), createObject('value', format('{0}-nsg', parameters('appGwName'))), createObject('value', parameters('existingNsgName')))]",
+                  "reuseExisting": {
+                    "value": "[not(empty(parameters('existingNsgName')))]"
+                  },
+                  "subnetAddressPrefix": {
+                    "value": "[parameters('subnetAddressPrefix')]"
+                  },
+                  "enableHttps": {
+                    "value": "[parameters('enableHttps')]"
+                  },
+                  "tags": {
+                    "value": "[parameters('tags')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.38.33.27573",
+                      "templateHash": "8381509531314175986"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "defaultValue": "[resourceGroup().location]",
+                      "metadata": {
+                        "description": "Region for a new NSG. Existing NSGs retain their location and tags."
+                      }
+                    },
+                    "nsgName": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80,
+                      "metadata": {
+                        "description": "Name of the new or existing NSG in this resource group."
+                      }
+                    },
+                    "reuseExisting": {
+                      "type": "bool",
+                      "defaultValue": false,
+                      "metadata": {
+                        "description": "Reuse a governance-owned NSG and deploy only the application client rule. Otherwise, manage the complete custom rule collection of a new repository-owned NSG."
+                      }
+                    },
+                    "subnetAddressPrefix": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Address prefix of the dedicated Application Gateway subnet."
+                      }
+                    },
+                    "enableHttps": {
+                      "type": "bool",
+                      "defaultValue": false,
+                      "metadata": {
+                        "description": "Allow port 443 as well as the port 80 redirect when the gateway has an HTTPS listener."
+                      }
+                    },
+                    "tags": {
+                      "type": "object",
+                      "defaultValue": {},
+                      "metadata": {
+                        "description": "Tags applied only to a repository-owned NSG."
+                      }
+                    }
+                  },
+                  "variables": {
+                    "httpClientPorts": [
+                      "80"
+                    ],
+                    "httpsClientPorts": [
+                      "80",
+                      "443"
+                    ],
+                    "clientIngressRule": {
+                      "name": "AllowByokClientIngress",
+                      "properties": {
+                        "description": "Public Copilot BYOK traffic to the Application Gateway listeners.",
+                        "priority": 1000,
+                        "direction": "Inbound",
+                        "access": "Allow",
+                        "protocol": "Tcp",
+                        "sourceAddressPrefix": "Internet",
+                        "sourcePortRange": "*",
+                        "destinationAddressPrefix": "[parameters('subnetAddressPrefix')]",
+                        "destinationPortRanges": "[if(parameters('enableHttps'), variables('httpsClientPorts'), variables('httpClientPorts'))]"
+                      }
+                    }
+                  },
+                  "resources": [
+                    {
+                      "condition": "[not(parameters('reuseExisting'))]",
+                      "type": "Microsoft.Network/networkSecurityGroups",
+                      "apiVersion": "2023-11-01",
+                      "name": "[parameters('nsgName')]",
+                      "location": "[parameters('location')]",
+                      "tags": "[parameters('tags')]",
+                      "properties": {
+                        "securityRules": [
+                          "[variables('clientIngressRule')]",
+                          {
+                            "name": "AllowGatewayManager",
+                            "properties": {
+                              "description": "Required Application Gateway v2 infrastructure traffic.",
+                              "priority": 1100,
+                              "direction": "Inbound",
+                              "access": "Allow",
+                              "protocol": "Tcp",
+                              "sourceAddressPrefix": "GatewayManager",
+                              "sourcePortRange": "*",
+                              "destinationAddressPrefix": "*",
+                              "destinationPortRange": "65200-65535"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "condition": "[parameters('reuseExisting')]",
+                      "type": "Microsoft.Network/networkSecurityGroups/securityRules",
+                      "apiVersion": "2023-11-01",
+                      "name": "[format('{0}/{1}', parameters('nsgName'), variables('clientIngressRule').name)]",
+                      "properties": "[variables('clientIngressRule').properties]"
+                    }
+                  ],
+                  "outputs": {
+                    "networkSecurityGroupId": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Network/networkSecurityGroups', parameters('nsgName'))]"
+                    }
+                  }
+                }
+              }
             }
           ],
           "outputs": {
@@ -1900,6 +2072,10 @@
             "appGatewayName": {
               "type": "string",
               "value": "[parameters('appGwName')]"
+            },
+            "networkSecurityGroupId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Resources/deployments', 'appGatewayNsg'), '2025-04-01').outputs.networkSecurityGroupId.value]"
             }
           }
         }
@@ -1936,6 +2112,10 @@
     "appGatewayFrontendUrl": {
       "type": "string",
       "value": "[if(parameters('deployAppGateway'), reference(resourceId('Microsoft.Resources/deployments', 'appGateway'), '2025-04-01').outputs.frontendUrl.value, '')]"
+    },
+    "appGatewayNetworkSecurityGroupId": {
+      "type": "string",
+      "value": "[if(parameters('deployAppGateway'), reference(resourceId('Microsoft.Resources/deployments', 'appGateway'), '2025-04-01').outputs.networkSecurityGroupId.value, '')]"
     },
     "applicationInsightsName": {
       "type": "string",

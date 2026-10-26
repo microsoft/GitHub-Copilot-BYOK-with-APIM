@@ -209,13 +209,47 @@ which logs matches without blocking. Review the WAF logs, exclude or tune the of
 for the request body, then switch to **Prevention** to enforce.
 
 **What the template creates** (`modules/app-gateway.bicep`): a dedicated VNet + subnet, a
-static Standard public IP, a WAF policy (OWASP 3.2), and the Application Gateway itself with a
+static Standard public IP, an explicitly associated subnet NSG, a WAF policy (OWASP 3.2),
+and the Application Gateway itself with a
 backend pool targeting the APIM hostname over HTTPS, a health probe against APIM's
 `/status-0123456789abcdef` endpoint, the secret-injecting rewrite rule set, and an HTTP
 listener (the lab uses port 80 for simple testing — a production front end should terminate
 HTTPS with a real certificate, since Copilot BYOK requires HTTPS). Outputs `appGatewayPublicIp`
 and `appGatewayFrontendUrl` give you the address to point clients at and to feed back into
 `appGwAllowedClientIp`.
+
+### Gateway subnet NSG ownership
+
+Fresh deployments create `<appGwName>-nsg`. Its custom rules allow public TCP to the
+active listeners (80 during bootstrap; 80 and 443 with HTTPS) and GatewayManager TCP
+65200-65535. Azure's default AzureLoadBalancer and outbound allowances remain intact.
+Public HTTPS is required because enterprise BYOK calls need not originate from the
+user's workstation. APIM still enforces the gateway secret and organization key.
+
+For an NSG owned by governance, set `appGwExistingNsgName` to its name in the deployment
+resource group before redeploying. The standalone
+[NSG module](../infra/modules/app-gateway-nsg.bicep) then manages only
+`AllowByokClientIngress`, at inbound priority 1000, without redeploying the NSG parent
+or replacing its other rules. The VNet's inline subnet declaration retains that NSG
+association. Inspect name/priority collisions and required infrastructure rules first.
+Output `appGatewayNetworkSecurityGroupId` reports the selected NSG.
+
+The default new-NSG mode owns the entire custom rule collection; it is not an adoption
+mechanism for an externally managed NSG. Incremental ARM deployment does not preserve
+unspecified parent properties. Coordinate rule retention with governance automation;
+neither restarting the gateway nor deploying IaC prevents another controller from
+changing network rules afterward. See the [network recovery runbook](traffic-flow.md#healthy-backend-but-public-connections-fail).
+
+### Chat API request compatibility
+
+The chat operation normalizes deprecated `max_tokens` to `max_completion_tokens` for
+the Foundry OpenAI backend. The same numeric budget is retained, and an explicit
+canonical value wins if both fields are present. This applies automatically to every
+chat deployment/alias on that backend, without model-name heuristics or a maintained
+allowlist. Alternate Cohere/managed-compute routes retain their legacy contract.
+The Responses API is unchanged. The [executable policy tests](../tests/chat-request-compatibility.ps1)
+compile the actual request-rewrite expression and verify budgets, field precedence,
+unrelated fields, existing tool behavior, and alternate-backend preservation.
 
 ### HTTPS listener (optional)
 

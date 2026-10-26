@@ -165,6 +165,7 @@ deployment subscription.
 | `foundryProjectName` | Include the project's managed-compute deployments in `/models` |
 | `extraModelIds` | Manually add callable deployments missing from discovery |
 | `defaultTemperatureModelIds` | Normalize Chat Completions temperature to `1` for models that require it |
+| `appGwExistingNsgName` | Preserve an existing gateway subnet NSG in this resource group; manage only the application client rule |
 
 For all types, defaults, dependencies, and cost notes, see the
 [parameter reference](parameters.md). Keep discovery API versions at their defaults; inference
@@ -175,6 +176,13 @@ uses `/openai/v1`. For AI feature examples, use the [AI Gateway guide](ai-gatewa
 your certificate. Preserve existing custom names, endpoints, and Foundry subscription and resource-group
 settings. Deployments that previously omitted `deployAppGateway` will now add it; set `false` explicitly
 only if you intend to run APIM without WAF.
+
+**Check the attached NSG before upgrading an existing gateway.** A fresh deployment creates
+`<appGwName>-nsg`, but a governance-owned NSG must be explicitly selected with
+`appGwExistingNsgName`. Otherwise, redeployment selects the new repository-owned NSG rather
+than preserving the governance association. Follow [NSG discovery and recovery](traffic-flow.md#healthy-backend-but-public-connections-fail)
+to find the attached name, check rule ownership and priority 1000, and preview the change.
+Existing-NSG mode requires the NSG to be in the gateway deployment resource group.
 
 **Do not commit secrets.** `infra/my.bicepparam` is ignored by Git. Protect any copies, keys,
 passwords, PFX files, and base64-encoded certificate data.
@@ -192,7 +200,12 @@ az deployment group create \
   --parameters infra/my.bicepparam
 ```
 
-This creates APIM, Application Gateway, and the per-org APIs and policies. It grants APIM's
+This creates APIM, Application Gateway, its subnet NSG, and the per-org APIs and policies.
+The NSG permits public TCP 80 and, when HTTPS is enabled, TCP 443. Port 80 redirects to HTTPS
+after certificate setup. A new NSG also permits required GatewayManager traffic and retains
+Azure's default rules. With `appGwExistingNsgName`, only the application client rule is updated
+in that NSG; management and other governance rules must already meet the gateway requirements.
+It grants APIM's
 managed identity the **Foundry User** role on your Foundry account. APIM provisioning can take
 30–45 minutes.
 
@@ -340,12 +353,19 @@ If the gateway is already starting or stopping, wait for that operation to finis
 **Stopping interrupts all gateway traffic until you start it again.** This does not stop APIM,
 Foundry, or other supporting resources, which can continue to incur charges.
 
+After starting, check both backend health and a real HTTPS request through the public hostname.
+`Running` and a healthy APIM probe do not verify public client access, authentication, inference,
+or streaming. A populated model picker is not proof that a prompt has ever succeeded.
+Use the [post-start troubleshooting runbook](traffic-flow.md#healthy-backend-but-public-connections-fail)
+and repeat [proxy verification](#step-5--verify-the-proxy), including the original Copilot client.
+
 ## Troubleshooting
 
 | Symptom | Check or fix |
 | --- | --- |
 | Application Gateway missing | Check the deployed `deployAppGateway` value, especially in older parameter files |
 | Application Gateway stopped | Use the [start/stop helper](#start-or-stop-application-gateway) with `-Action Start` |
+| Gateway is running and backend is healthy, but public connections reset or time out | Check the attached NSG's client-port allowances with the [network recovery runbook](traffic-flow.md#healthy-backend-but-public-connections-fail) |
 | HTTPS stays disabled after adding a PFX | Remove an explicit `appGwEnableHttps = false`; supply both PFX parameters and redeploy |
 | Gateway secret validation fails | Set `appGwSharedSecret` to a stable random value of at least 32 characters |
 | `403 gateway_required` | Use the gateway's HTTPS hostname, not APIM. If already using it, check the gateway secret |
@@ -356,8 +376,10 @@ Foundry, or other supporting resources, which can continue to incur charges.
 | `429 Too Many Requests` | Check per-org request or token rate limits; reduce traffic or adjust limits |
 | `403 model_not_allowed` | Use an allowed deployment from `/models`, or update `orgModels` and redeploy |
 | Copilot CLI rejects the model | Confirm [tool calling and streaming support](../README.md#model-requirements) |
+| Direct inference works but Copilot says no response was returned | Check client diagnostics for a [static context-budget warning](traffic-flow.md#5-direct-inference-works-but-copilot-still-reports-no-response); reduce unnecessary tools/instructions or use a larger-context model |
 | `400` mentions function tools with `reasoning_effort` | Configure VS Code's Custom Endpoint for **Responses**, with URL `<base-url>/responses` |
 | `400` says temperature must be `1` | Add the deployment ID to `defaultTemperatureModelIds` and redeploy |
+| `400` says `max_tokens` is unsupported | Deploy the current [chat request compatibility policy](traffic-flow.md#chat-request-parameter-compatibility); no per-model setting is required |
 | Client calls `/openai/deployments/...` | Change provider type from `azure` to `openai` |
 
 For DNS, TLS, WAF, and gateway errors, see [traffic-flow troubleshooting](traffic-flow.md#common-failure-points).
