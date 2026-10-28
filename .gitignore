@@ -5,6 +5,9 @@
 
 /infra/my.bicepparam
 
+# Local Azure state and generated deployment files
+.azure/
+
 # User-specific files
 *.rsuser
 *.suo
