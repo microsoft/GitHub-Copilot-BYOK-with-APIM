@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.38.33.27573",
-      "templateHash": "6677116549446083760"
+      "templateHash": "9293014700582866222"
     }
   },
   "parameters": {
@@ -449,6 +449,13 @@
         "description": "Deploy Application Gateway (WAF_v2) and require requests to traverse it. Enabled by default and incurs Azure charges. Set false explicitly for APIM-only deployments without WAF."
       }
     },
+    "enablePrivateNetworking": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Keep Application Gateway public, put APIM in an internal VNet, and add private endpoints/DNS for primary and pool Foundry accounts. Requires deployAppGateway and the Developer or classic Premium APIM tier. Does not change existing Foundry public-access settings."
+      }
+    },
     "appGwName": {
       "type": "string",
       "defaultValue": "[format('{0}-appgw', parameters('apimName'))]",
@@ -615,6 +622,7 @@
     "responsesPolicyXml": "<policies>\r\n  <inbound>\r\n    <!-- Runs the API-level auth/attribution policy first (sets byokOrg + byokModel), then the\r\n         per-org AI governance block (token limits + token metrics). __AI_GOVERNANCE__ is\r\n         substituted per org at deploy time and is empty when no limits/metrics are configured. -->\r\n    <base />\r\n    __AI_GOVERNANCE__\r\n  </inbound>\r\n  <backend>\r\n    <base />\r\n  </backend>\r\n  <outbound>\r\n    <base />\r\n  </outbound>\r\n  <on-error>\r\n    <base />\r\n  </on-error>\r\n</policies>\r\n",
     "appGwGuardTemplate": "<!--\r\n  App Gateway front-door enforcement (injected only when the App Gateway feature is enabled).\r\n  App Gateway adds X-AppGw-Secret to every forwarded request via a rewrite rule set. Because\r\n  the rewrite SETS the header, any value a client tries to supply is overwritten at the gateway.\r\n  A caller hitting the public APIM hostname directly does not carry the secret and is rejected\r\n  with 403, so the WAF cannot be bypassed. __APPGW_IPFILTER__ is optionally replaced with an\r\n  ip-filter that additionally restricts inbound traffic to App Gateway's public IP.\r\n-->\r\n<choose>\r\n  <when condition=\"@(context.Request.Headers.GetValueOrDefault(&quot;X-AppGw-Secret&quot;, &quot;&quot;) != &quot;{{appGwSecret}}&quot;)\">\r\n    <return-response>\r\n      <set-status code=\"403\" reason=\"Forbidden\" />\r\n      <set-header name=\"Content-Type\" exists-action=\"override\">\r\n        <value>application/json</value>\r\n      </set-header>\r\n      <set-body>{\"error\":{\"message\":\"Direct access is not permitted; requests must traverse the gateway.\",\"type\":\"invalid_request_error\",\"code\":\"gateway_required\"}}</set-body>\r\n    </return-response>\r\n  </when>\r\n</choose>\r\n__APPGW_IPFILTER__\r\n",
     "staticModelsTemplate": "<policies>\r\n  <inbound>\r\n    <base />\r\n    <!--\r\n      Static /models response for orgs routed to a managed online endpoint (for example\r\n      Cohere), which does not expose a Foundry-style deployments listing. The advertised\r\n      model ids are injected at deploy time:\r\n        __MODELS_JSON__ -> comma-separated, quoted model id literals\r\n    -->\r\n    <return-response>\r\n      <set-status code=\"200\" reason=\"OK\" />\r\n      <set-header name=\"Content-Type\" exists-action=\"override\">\r\n        <value>application/json</value>\r\n      </set-header>\r\n      <set-body><![CDATA[@{\r\n          var created = DateTimeOffset.UtcNow.ToUnixTimeSeconds();\r\n          var allow = new HashSet<string>(StringComparer.OrdinalIgnoreCase);\r\n          foreach (var a in \"__ALLOWED_MODELS_CSV__\".Split(new char[]{','}, StringSplitOptions.RemoveEmptyEntries)) { var t = a.Trim(); if (t.Length > 0) { allow.Add(t); } }\r\n          var ids = new JArray(__MODELS_JSON__);\r\n          var data = new JArray();\r\n          foreach (var id in ids) {\r\n              var name = (string)id;\r\n              if (string.IsNullOrWhiteSpace(name)) { continue; }\r\n              if (allow.Count > 0 && !allow.Contains(name)) { continue; }\r\n              data.Add(new JObject {\r\n                  [\"id\"] = name,\r\n                  [\"object\"] = \"model\",\r\n                  [\"created\"] = created,\r\n                  [\"owned_by\"] = \"cohere\"\r\n              });\r\n          }\r\n          return new JObject {\r\n              [\"object\"] = \"list\",\r\n              [\"data\"] = data\r\n          }.ToString();\r\n      }]]></set-body>\r\n    </return-response>\r\n  </inbound>\r\n  <backend>\r\n    <base />\r\n  </backend>\r\n  <outbound>\r\n    <base />\r\n  </outbound>\r\n  <on-error>\r\n    <base />\r\n  </on-error>\r\n</policies>\r\n",
+    "privateNetworkingEnabled": "[if(not(parameters('enablePrivateNetworking')), false(), if(not(parameters('deployAppGateway')), fail('Private networking requires deployAppGateway = true.'), if(not(contains(createArray('Developer', 'Premium'), parameters('apimSkuName'))), fail('Private networking requires the Developer or classic Premium APIM tier. Other tiers remain supported in public mode.'), if(not(empty(parameters('appGwAllowedClientIp'))), fail('Clear appGwAllowedClientIp in private mode. APIM accepts HTTPS from the Application Gateway subnet through its NSG, not the gateway public IP.'), if(not(empty(variables('unsupportedPrivateFoundryEndpoints'))), fail('Private Foundry networking requires standard account hostnames ending in openai.azure.com, cognitiveservices.azure.com, or services.ai.azure.com.'), true())))))]",
     "validatedAppGwSharedSecret": "[if(or(not(parameters('deployAppGateway')), greaterOrEquals(length(parameters('appGwSharedSecret')), 32)), parameters('appGwSharedSecret'), fail('Application Gateway requires appGwSharedSecret with at least 32 characters. Generate it once with openssl rand -hex 32 and keep it for redeployments.'))]",
     "appGwHttpsReady": "[if(not(parameters('appGwEnableHttps')), false(), if(not(parameters('deployAppGateway')), fail('HTTPS requires deployAppGateway = true. Remove the certificate settings or enable Application Gateway.'), if(or(empty(parameters('appGwHttpsPfxBase64')), empty(parameters('appGwHttpsPfxPassword'))), fail('HTTPS requires both appGwHttpsPfxBase64 and appGwHttpsPfxPassword.'), true())))]",
     "normalizedFoundryBackendBaseUrl": "[if(endsWith(parameters('foundryBackendBaseUrl'), '/'), substring(parameters('foundryBackendBaseUrl'), 0, sub(length(parameters('foundryBackendBaseUrl')), 1)), parameters('foundryBackendBaseUrl'))]",
@@ -636,6 +644,14 @@
     "embeddingsBackendId": "embeddings-backend",
     "useSemanticCache": "[parameters('deploySemanticCache')]",
     "useFoundryPool": "[not(empty(parameters('foundryBackends')))]",
+    "primaryFoundryAccount": {
+      "accountName": "[parameters('foundryAccountName')]",
+      "subscriptionId": "[parameters('foundryAccountSubscriptionId')]",
+      "resourceGroup": "[parameters('foundryAccountResourceGroup')]"
+    },
+    "privateFoundryAccounts": "[union(createArray(variables('primaryFoundryAccount')), map(variables('foundryPoolMembersSpec'), lambda('m', createObject('accountName', lambdaVariables('m').accountName, 'subscriptionId', lambdaVariables('m').subscriptionId, 'resourceGroup', lambdaVariables('m').resourceGroup))))]",
+    "privateFoundryEndpoints": "[concat(createArray(createObject('accountName', parameters('foundryAccountName'), 'baseUrl', variables('normalizedFoundryBackendBaseUrl'))), variables('foundryPoolMembersSpec'))]",
+    "unsupportedPrivateFoundryEndpoints": "[filter(variables('privateFoundryEndpoints'), lambda('endpoint', not(contains(createArray(format('https://{0}.openai.azure.com', toLower(lambdaVariables('endpoint').accountName)), format('https://{0}.cognitiveservices.azure.com', toLower(lambdaVariables('endpoint').accountName)), format('https://{0}.services.ai.azure.com', toLower(lambdaVariables('endpoint').accountName))), toLower(lambdaVariables('endpoint').baseUrl)))))]",
     "foundryRbacTargets": "[if(variables('useFoundryPool'), map(variables('foundryPoolMembersSpec'), lambda('m', createObject('accountName', lambdaVariables('m').accountName, 'subscriptionId', lambdaVariables('m').subscriptionId, 'resourceGroup', lambdaVariables('m').resourceGroup))), createArray(createObject('accountName', parameters('foundryAccountName'), 'subscriptionId', parameters('foundryAccountSubscriptionId'), 'resourceGroup', parameters('foundryAccountResourceGroup'))))]"
   },
   "resources": [
@@ -654,8 +670,14 @@
       },
       "properties": {
         "publisherName": "[parameters('apimPublisherName')]",
-        "publisherEmail": "[parameters('apimPublisherEmail')]"
-      }
+        "publisherEmail": "[parameters('apimPublisherEmail')]",
+        "virtualNetworkType": "[if(variables('privateNetworkingEnabled'), 'Internal', 'None')]",
+        "virtualNetworkConfiguration": "[if(variables('privateNetworkingEnabled'), createObject('subnetResourceId', reference(resourceId('Microsoft.Resources/deployments', 'appGatewayNetwork'), '2025-04-01').outputs.apimSubnetId.value), null())]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'appGatewayNetwork')]",
+        "[resourceId('Microsoft.Resources/deployments', 'foundryPrivateNetwork')]"
+      ]
     },
     {
       "condition": "[not(variables('useFoundryPool'))]",
@@ -1458,7 +1480,7 @@
       "condition": "[parameters('deployAppGateway')]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
-      "name": "appGateway",
+      "name": "appGatewayNetwork",
       "properties": {
         "expressionEvaluationOptions": {
           "scope": "inner"
@@ -1474,9 +1496,538 @@
           "existingNsgName": {
             "value": "[parameters('appGwExistingNsgName')]"
           },
+          "enableHttps": {
+            "value": "[variables('appGwHttpsReady')]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.38.33.27573",
+              "templateHash": "1785402418238178016"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "defaultValue": "[resourceGroup().location]"
+            },
+            "appGwName": {
+              "type": "string"
+            },
+            "existingNsgName": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "enableHttps": {
+              "type": "bool",
+              "defaultValue": false
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {}
+            }
+          },
+          "variables": {
+            "vnetName": "[format('{0}-vnet', parameters('appGwName'))]",
+            "appGatewaySubnetName": "appgw-subnet",
+            "appGatewaySubnetPrefix": "10.50.0.0/24",
+            "apimSubnetName": "apim-subnet",
+            "apimSubnetPrefix": "10.50.1.0/24",
+            "privateEndpointSubnetName": "private-endpoints-subnet"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Network/networkSecurityGroups",
+              "apiVersion": "2023-11-01",
+              "name": "[format('{0}-apim-nsg', parameters('appGwName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "securityRules": [
+                  {
+                    "name": "AllowApplicationGatewayHttps",
+                    "properties": {
+                      "priority": 100,
+                      "direction": "Inbound",
+                      "access": "Allow",
+                      "protocol": "Tcp",
+                      "sourceAddressPrefix": "[variables('appGatewaySubnetPrefix')]",
+                      "sourcePortRange": "*",
+                      "destinationAddressPrefix": "[variables('apimSubnetPrefix')]",
+                      "destinationPortRange": "443"
+                    }
+                  },
+                  {
+                    "name": "AllowApiManagementControlPlane",
+                    "properties": {
+                      "priority": 110,
+                      "direction": "Inbound",
+                      "access": "Allow",
+                      "protocol": "Tcp",
+                      "sourceAddressPrefix": "ApiManagement",
+                      "sourcePortRange": "*",
+                      "destinationAddressPrefix": "[variables('apimSubnetPrefix')]",
+                      "destinationPortRange": "3443"
+                    }
+                  },
+                  {
+                    "name": "AllowAzureLoadBalancer",
+                    "properties": {
+                      "priority": 120,
+                      "direction": "Inbound",
+                      "access": "Allow",
+                      "protocol": "Tcp",
+                      "sourceAddressPrefix": "AzureLoadBalancer",
+                      "sourcePortRange": "*",
+                      "destinationAddressPrefix": "[variables('apimSubnetPrefix')]",
+                      "destinationPortRange": "6390"
+                    }
+                  },
+                  {
+                    "name": "AllowApimSubnetTraffic",
+                    "properties": {
+                      "priority": 130,
+                      "direction": "Inbound",
+                      "access": "Allow",
+                      "protocol": "*",
+                      "sourceAddressPrefix": "[variables('apimSubnetPrefix')]",
+                      "sourcePortRange": "*",
+                      "destinationAddressPrefix": "[variables('apimSubnetPrefix')]",
+                      "destinationPortRange": "*"
+                    }
+                  },
+                  {
+                    "name": "DenyOtherInbound",
+                    "properties": {
+                      "priority": 4096,
+                      "direction": "Inbound",
+                      "access": "Deny",
+                      "protocol": "*",
+                      "sourceAddressPrefix": "*",
+                      "sourcePortRange": "*",
+                      "destinationAddressPrefix": "*",
+                      "destinationPortRange": "*"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "type": "Microsoft.Network/virtualNetworks",
+              "apiVersion": "2023-11-01",
+              "name": "[variables('vnetName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "addressSpace": {
+                  "addressPrefixes": [
+                    "10.50.0.0/16"
+                  ]
+                },
+                "subnets": [
+                  {
+                    "name": "[variables('appGatewaySubnetName')]",
+                    "properties": {
+                      "addressPrefix": "[variables('appGatewaySubnetPrefix')]",
+                      "networkSecurityGroup": {
+                        "id": "[reference(resourceId('Microsoft.Resources/deployments', 'appGatewayNsg'), '2025-04-01').outputs.networkSecurityGroupId.value]"
+                      }
+                    }
+                  },
+                  {
+                    "name": "[variables('apimSubnetName')]",
+                    "properties": {
+                      "addressPrefix": "[variables('apimSubnetPrefix')]",
+                      "networkSecurityGroup": {
+                        "id": "[resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-apim-nsg', parameters('appGwName')))]"
+                      }
+                    }
+                  },
+                  {
+                    "name": "[variables('privateEndpointSubnetName')]",
+                    "properties": {
+                      "addressPrefix": "10.50.2.0/24",
+                      "privateEndpointNetworkPolicies": "Disabled"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-apim-nsg', parameters('appGwName')))]",
+                "[resourceId('Microsoft.Resources/deployments', 'appGatewayNsg')]"
+              ]
+            },
+            {
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "appGatewayNsg",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "nsgName": "[if(empty(parameters('existingNsgName')), createObject('value', format('{0}-nsg', parameters('appGwName'))), createObject('value', parameters('existingNsgName')))]",
+                  "reuseExisting": {
+                    "value": "[not(empty(parameters('existingNsgName')))]"
+                  },
+                  "subnetAddressPrefix": {
+                    "value": "[variables('appGatewaySubnetPrefix')]"
+                  },
+                  "enableHttps": {
+                    "value": "[parameters('enableHttps')]"
+                  },
+                  "tags": {
+                    "value": "[parameters('tags')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.38.33.27573",
+                      "templateHash": "8381509531314175986"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "defaultValue": "[resourceGroup().location]",
+                      "metadata": {
+                        "description": "Region for a new NSG. Existing NSGs retain their location and tags."
+                      }
+                    },
+                    "nsgName": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80,
+                      "metadata": {
+                        "description": "Name of the new or existing NSG in this resource group."
+                      }
+                    },
+                    "reuseExisting": {
+                      "type": "bool",
+                      "defaultValue": false,
+                      "metadata": {
+                        "description": "Reuse a governance-owned NSG and deploy only the application client rule. Otherwise, manage the complete custom rule collection of a new repository-owned NSG."
+                      }
+                    },
+                    "subnetAddressPrefix": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Address prefix of the dedicated Application Gateway subnet."
+                      }
+                    },
+                    "enableHttps": {
+                      "type": "bool",
+                      "defaultValue": false,
+                      "metadata": {
+                        "description": "Allow port 443 as well as the port 80 redirect when the gateway has an HTTPS listener."
+                      }
+                    },
+                    "tags": {
+                      "type": "object",
+                      "defaultValue": {},
+                      "metadata": {
+                        "description": "Tags applied only to a repository-owned NSG."
+                      }
+                    }
+                  },
+                  "variables": {
+                    "httpClientPorts": [
+                      "80"
+                    ],
+                    "httpsClientPorts": [
+                      "80",
+                      "443"
+                    ],
+                    "clientIngressRule": {
+                      "name": "AllowByokClientIngress",
+                      "properties": {
+                        "description": "Public Copilot BYOK traffic to the Application Gateway listeners.",
+                        "priority": 1000,
+                        "direction": "Inbound",
+                        "access": "Allow",
+                        "protocol": "Tcp",
+                        "sourceAddressPrefix": "Internet",
+                        "sourcePortRange": "*",
+                        "destinationAddressPrefix": "[parameters('subnetAddressPrefix')]",
+                        "destinationPortRanges": "[if(parameters('enableHttps'), variables('httpsClientPorts'), variables('httpClientPorts'))]"
+                      }
+                    }
+                  },
+                  "resources": [
+                    {
+                      "condition": "[not(parameters('reuseExisting'))]",
+                      "type": "Microsoft.Network/networkSecurityGroups",
+                      "apiVersion": "2023-11-01",
+                      "name": "[parameters('nsgName')]",
+                      "location": "[parameters('location')]",
+                      "tags": "[parameters('tags')]",
+                      "properties": {
+                        "securityRules": [
+                          "[variables('clientIngressRule')]",
+                          {
+                            "name": "AllowGatewayManager",
+                            "properties": {
+                              "description": "Required Application Gateway v2 infrastructure traffic.",
+                              "priority": 1100,
+                              "direction": "Inbound",
+                              "access": "Allow",
+                              "protocol": "Tcp",
+                              "sourceAddressPrefix": "GatewayManager",
+                              "sourcePortRange": "*",
+                              "destinationAddressPrefix": "*",
+                              "destinationPortRange": "65200-65535"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "condition": "[parameters('reuseExisting')]",
+                      "type": "Microsoft.Network/networkSecurityGroups/securityRules",
+                      "apiVersion": "2023-11-01",
+                      "name": "[format('{0}/{1}', parameters('nsgName'), variables('clientIngressRule').name)]",
+                      "properties": "[variables('clientIngressRule').properties]"
+                    }
+                  ],
+                  "outputs": {
+                    "networkSecurityGroupId": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Network/networkSecurityGroups', parameters('nsgName'))]"
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "outputs": {
+            "vnetId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+            },
+            "appGatewaySubnetId": {
+              "type": "string",
+              "value": "[format('{0}/subnets/{1}', resourceId('Microsoft.Network/virtualNetworks', variables('vnetName')), variables('appGatewaySubnetName'))]"
+            },
+            "apimSubnetId": {
+              "type": "string",
+              "value": "[format('{0}/subnets/{1}', resourceId('Microsoft.Network/virtualNetworks', variables('vnetName')), variables('apimSubnetName'))]"
+            },
+            "privateEndpointSubnetId": {
+              "type": "string",
+              "value": "[format('{0}/subnets/{1}', resourceId('Microsoft.Network/virtualNetworks', variables('vnetName')), variables('privateEndpointSubnetName'))]"
+            },
+            "networkSecurityGroupId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Resources/deployments', 'appGatewayNsg'), '2025-04-01').outputs.networkSecurityGroupId.value]"
+            }
+          }
+        }
+      }
+    },
+    {
+      "condition": "[variables('privateNetworkingEnabled')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "foundryPrivateNetwork",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "namePrefix": {
+            "value": "[parameters('appGwName')]"
+          },
+          "vnetId": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'appGatewayNetwork'), '2025-04-01').outputs.vnetId.value]"
+          },
+          "subnetId": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'appGatewayNetwork'), '2025-04-01').outputs.privateEndpointSubnetId.value]"
+          },
+          "foundryAccounts": {
+            "value": "[variables('privateFoundryAccounts')]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.38.33.27573",
+              "templateHash": "983022401476943508"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "defaultValue": "[resourceGroup().location]"
+            },
+            "namePrefix": {
+              "type": "string"
+            },
+            "vnetId": {
+              "type": "string"
+            },
+            "subnetId": {
+              "type": "string"
+            },
+            "foundryAccounts": {
+              "type": "array",
+              "metadata": {
+                "description": "Primary and pool accounts, each with accountName, subscriptionId, and resourceGroup."
+              }
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {}
+            }
+          },
+          "variables": {
+            "copy": [
+              {
+                "name": "privateDnsZoneConfigs",
+                "count": "[length(variables('privateDnsZoneNames'))]",
+                "input": {
+                  "name": "[variables('privateDnsZoneNames')[copyIndex('privateDnsZoneConfigs')]]",
+                  "properties": {
+                    "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneNames')[copyIndex('privateDnsZoneConfigs')])]"
+                  }
+                }
+              }
+            ],
+            "privateDnsZoneNames": [
+              "privatelink.openai.azure.com",
+              "privatelink.cognitiveservices.azure.com",
+              "privatelink.services.ai.azure.com"
+            ]
+          },
+          "resources": [
+            {
+              "copy": {
+                "name": "privateDnsZones",
+                "count": "[length(variables('privateDnsZoneNames'))]"
+              },
+              "type": "Microsoft.Network/privateDnsZones",
+              "apiVersion": "2020-06-01",
+              "name": "[variables('privateDnsZoneNames')[copyIndex()]]",
+              "location": "global",
+              "tags": "[parameters('tags')]"
+            },
+            {
+              "copy": {
+                "name": "dnsLinks",
+                "count": "[length(variables('privateDnsZoneNames'))]"
+              },
+              "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+              "apiVersion": "2020-06-01",
+              "name": "[format('{0}/{1}', variables('privateDnsZoneNames')[copyIndex()], format('{0}-link', parameters('namePrefix')))]",
+              "location": "global",
+              "properties": {
+                "registrationEnabled": false,
+                "virtualNetwork": {
+                  "id": "[parameters('vnetId')]"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneNames')[copyIndex()])]"
+              ]
+            },
+            {
+              "copy": {
+                "name": "privateEndpoints",
+                "count": "[length(parameters('foundryAccounts'))]"
+              },
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2023-11-01",
+              "name": "[format('{0}-foundry-pe-{1}', parameters('namePrefix'), copyIndex())]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "subnet": {
+                  "id": "[parameters('subnetId')]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "foundry",
+                    "properties": {
+                      "privateLinkServiceId": "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('foundryAccounts')[copyIndex()].subscriptionId, parameters('foundryAccounts')[copyIndex()].resourceGroup), 'Microsoft.CognitiveServices/accounts', parameters('foundryAccounts')[copyIndex()].accountName)]",
+                      "groupIds": [
+                        "account"
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "copy": {
+                "name": "dnsZoneGroups",
+                "count": "[length(parameters('foundryAccounts'))]"
+              },
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2023-11-01",
+              "name": "[format('{0}/{1}', format('{0}-foundry-pe-{1}', parameters('namePrefix'), copyIndex()), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": "[if(equals(reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('foundryAccounts')[copyIndex()].subscriptionId, parameters('foundryAccounts')[copyIndex()].resourceGroup), 'Microsoft.CognitiveServices/accounts', parameters('foundryAccounts')[copyIndex()].accountName), '2023-05-01', 'full').kind, 'OpenAI'), createArray(variables('privateDnsZoneConfigs')[0]), if(equals(reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('foundryAccounts')[copyIndex()].subscriptionId, parameters('foundryAccounts')[copyIndex()].resourceGroup), 'Microsoft.CognitiveServices/accounts', parameters('foundryAccounts')[copyIndex()].accountName), '2023-05-01', 'full').kind, 'AIServices'), variables('privateDnsZoneConfigs'), fail('Private Foundry connections require OpenAI or AIServices accounts.')))]"
+              },
+              "dependsOn": [
+                "privateDnsZones",
+                "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-foundry-pe-{1}', parameters('namePrefix'), copyIndex()))]"
+              ]
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'appGatewayNetwork')]"
+      ]
+    },
+    {
+      "condition": "[parameters('deployAppGateway')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "appGateway",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "appGwName": {
+            "value": "[parameters('appGwName')]"
+          },
+          "subnetResourceId": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'appGatewayNetwork'), '2025-04-01').outputs.appGatewaySubnetId.value]"
+          },
           "apimGatewayHost": {
             "value": "[format('{0}.azure-api.net', parameters('apimName'))]"
           },
+          "apimGatewayPrivateIp": "[if(variables('privateNetworkingEnabled'), createObject('value', reference(resourceId('Microsoft.ApiManagement/service', parameters('apimName')), '2023-05-01-preview').privateIPAddresses[0]), createObject('value', ''))]",
           "sharedSecret": {
             "value": "[variables('validatedAppGwSharedSecret')]"
           },
@@ -1506,7 +2057,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.38.33.27573",
-              "templateHash": "4785042119829516216"
+              "templateHash": "12318574664286418611"
             }
           },
           "parameters": {
@@ -1523,39 +2074,10 @@
                 "description": "Name of the Application Gateway."
               }
             },
-            "existingNsgName": {
+            "subnetResourceId": {
               "type": "string",
-              "defaultValue": "",
               "metadata": {
-                "description": "Existing NSG in this resource group. Empty creates <appGwName>-nsg; nonempty preserves the existing NSG and manages only the application client rule."
-              }
-            },
-            "vnetName": {
-              "type": "string",
-              "defaultValue": "[format('{0}-vnet', parameters('appGwName'))]",
-              "metadata": {
-                "description": "Name of the VNet created for the Application Gateway."
-              }
-            },
-            "vnetAddressPrefix": {
-              "type": "string",
-              "defaultValue": "10.50.0.0/16",
-              "metadata": {
-                "description": "Address space for the App Gateway VNet."
-              }
-            },
-            "subnetName": {
-              "type": "string",
-              "defaultValue": "appgw-subnet",
-              "metadata": {
-                "description": "Name of the dedicated App Gateway subnet."
-              }
-            },
-            "subnetAddressPrefix": {
-              "type": "string",
-              "defaultValue": "10.50.0.0/24",
-              "metadata": {
-                "description": "Address prefix for the dedicated App Gateway subnet (v2 requires a subnet with no other resources, /24 recommended)."
+                "description": "Resource ID of the dedicated Application Gateway subnet."
               }
             },
             "publicIpName": {
@@ -1569,6 +2091,13 @@
               "type": "string",
               "metadata": {
                 "description": "Public hostname of the APIM gateway, for example my-apim.azure-api.net. Used as the backend target and Host/SNI."
+              }
+            },
+            "apimGatewayPrivateIp": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "APIM internal virtual IP in private mode. Empty uses the public gateway hostname."
               }
             },
             "sharedSecret": {
@@ -1764,34 +2293,6 @@
               }
             },
             {
-              "type": "Microsoft.Network/virtualNetworks",
-              "apiVersion": "2023-11-01",
-              "name": "[parameters('vnetName')]",
-              "location": "[parameters('location')]",
-              "tags": "[parameters('tags')]",
-              "properties": {
-                "addressSpace": {
-                  "addressPrefixes": [
-                    "[parameters('vnetAddressPrefix')]"
-                  ]
-                },
-                "subnets": [
-                  {
-                    "name": "[parameters('subnetName')]",
-                    "properties": {
-                      "addressPrefix": "[parameters('subnetAddressPrefix')]",
-                      "networkSecurityGroup": {
-                        "id": "[reference(resourceId('Microsoft.Resources/deployments', 'appGatewayNsg'), '2025-04-01').outputs.networkSecurityGroupId.value]"
-                      }
-                    }
-                  }
-                ]
-              },
-              "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'appGatewayNsg')]"
-              ]
-            },
-            {
               "type": "Microsoft.Network/applicationGateways",
               "apiVersion": "2023-11-01",
               "name": "[parameters('appGwName')]",
@@ -1808,7 +2309,7 @@
                     "name": "appGwIpConfig",
                     "properties": {
                       "subnet": {
-                        "id": "[format('{0}/subnets/{1}', resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName')), parameters('subnetName'))]"
+                        "id": "[parameters('subnetResourceId')]"
                       }
                     }
                   }
@@ -1830,9 +2331,7 @@
                     "name": "[variables('backendPoolName')]",
                     "properties": {
                       "backendAddresses": [
-                        {
-                          "fqdn": "[parameters('apimGatewayHost')]"
-                        }
+                        "[if(empty(parameters('apimGatewayPrivateIp')), createObject('fqdn', parameters('apimGatewayHost')), createObject('ipAddress', parameters('apimGatewayPrivateIp')))]"
                       ]
                     }
                   }
@@ -1863,7 +2362,8 @@
                       "port": 443,
                       "protocol": "Https",
                       "cookieBasedAffinity": "Disabled",
-                      "pickHostNameFromBackendAddress": true,
+                      "pickHostNameFromBackendAddress": false,
+                      "hostName": "[parameters('apimGatewayHost')]",
                       "requestTimeout": 120,
                       "probe": {
                         "id": "[format('{0}/probes/{1}', variables('appGwId'), variables('probeName'))]"
@@ -1902,158 +2402,8 @@
               },
               "dependsOn": [
                 "[resourceId('Microsoft.Network/publicIPAddresses', parameters('publicIpName'))]",
-                "[resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName'))]",
                 "[resourceId('Microsoft.Network/ApplicationGatewayWebApplicationFirewallPolicies', format('{0}-waf', parameters('appGwName')))]"
               ]
-            },
-            {
-              "type": "Microsoft.Resources/deployments",
-              "apiVersion": "2025-04-01",
-              "name": "appGatewayNsg",
-              "properties": {
-                "expressionEvaluationOptions": {
-                  "scope": "inner"
-                },
-                "mode": "Incremental",
-                "parameters": {
-                  "location": {
-                    "value": "[parameters('location')]"
-                  },
-                  "nsgName": "[if(empty(parameters('existingNsgName')), createObject('value', format('{0}-nsg', parameters('appGwName'))), createObject('value', parameters('existingNsgName')))]",
-                  "reuseExisting": {
-                    "value": "[not(empty(parameters('existingNsgName')))]"
-                  },
-                  "subnetAddressPrefix": {
-                    "value": "[parameters('subnetAddressPrefix')]"
-                  },
-                  "enableHttps": {
-                    "value": "[parameters('enableHttps')]"
-                  },
-                  "tags": {
-                    "value": "[parameters('tags')]"
-                  }
-                },
-                "template": {
-                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-                  "contentVersion": "1.0.0.0",
-                  "metadata": {
-                    "_generator": {
-                      "name": "bicep",
-                      "version": "0.38.33.27573",
-                      "templateHash": "8381509531314175986"
-                    }
-                  },
-                  "parameters": {
-                    "location": {
-                      "type": "string",
-                      "defaultValue": "[resourceGroup().location]",
-                      "metadata": {
-                        "description": "Region for a new NSG. Existing NSGs retain their location and tags."
-                      }
-                    },
-                    "nsgName": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 80,
-                      "metadata": {
-                        "description": "Name of the new or existing NSG in this resource group."
-                      }
-                    },
-                    "reuseExisting": {
-                      "type": "bool",
-                      "defaultValue": false,
-                      "metadata": {
-                        "description": "Reuse a governance-owned NSG and deploy only the application client rule. Otherwise, manage the complete custom rule collection of a new repository-owned NSG."
-                      }
-                    },
-                    "subnetAddressPrefix": {
-                      "type": "string",
-                      "metadata": {
-                        "description": "Address prefix of the dedicated Application Gateway subnet."
-                      }
-                    },
-                    "enableHttps": {
-                      "type": "bool",
-                      "defaultValue": false,
-                      "metadata": {
-                        "description": "Allow port 443 as well as the port 80 redirect when the gateway has an HTTPS listener."
-                      }
-                    },
-                    "tags": {
-                      "type": "object",
-                      "defaultValue": {},
-                      "metadata": {
-                        "description": "Tags applied only to a repository-owned NSG."
-                      }
-                    }
-                  },
-                  "variables": {
-                    "httpClientPorts": [
-                      "80"
-                    ],
-                    "httpsClientPorts": [
-                      "80",
-                      "443"
-                    ],
-                    "clientIngressRule": {
-                      "name": "AllowByokClientIngress",
-                      "properties": {
-                        "description": "Public Copilot BYOK traffic to the Application Gateway listeners.",
-                        "priority": 1000,
-                        "direction": "Inbound",
-                        "access": "Allow",
-                        "protocol": "Tcp",
-                        "sourceAddressPrefix": "Internet",
-                        "sourcePortRange": "*",
-                        "destinationAddressPrefix": "[parameters('subnetAddressPrefix')]",
-                        "destinationPortRanges": "[if(parameters('enableHttps'), variables('httpsClientPorts'), variables('httpClientPorts'))]"
-                      }
-                    }
-                  },
-                  "resources": [
-                    {
-                      "condition": "[not(parameters('reuseExisting'))]",
-                      "type": "Microsoft.Network/networkSecurityGroups",
-                      "apiVersion": "2023-11-01",
-                      "name": "[parameters('nsgName')]",
-                      "location": "[parameters('location')]",
-                      "tags": "[parameters('tags')]",
-                      "properties": {
-                        "securityRules": [
-                          "[variables('clientIngressRule')]",
-                          {
-                            "name": "AllowGatewayManager",
-                            "properties": {
-                              "description": "Required Application Gateway v2 infrastructure traffic.",
-                              "priority": 1100,
-                              "direction": "Inbound",
-                              "access": "Allow",
-                              "protocol": "Tcp",
-                              "sourceAddressPrefix": "GatewayManager",
-                              "sourcePortRange": "*",
-                              "destinationAddressPrefix": "*",
-                              "destinationPortRange": "65200-65535"
-                            }
-                          }
-                        ]
-                      }
-                    },
-                    {
-                      "condition": "[parameters('reuseExisting')]",
-                      "type": "Microsoft.Network/networkSecurityGroups/securityRules",
-                      "apiVersion": "2023-11-01",
-                      "name": "[format('{0}/{1}', parameters('nsgName'), variables('clientIngressRule').name)]",
-                      "properties": "[variables('clientIngressRule').properties]"
-                    }
-                  ],
-                  "outputs": {
-                    "networkSecurityGroupId": {
-                      "type": "string",
-                      "value": "[resourceId('Microsoft.Network/networkSecurityGroups', parameters('nsgName'))]"
-                    }
-                  }
-                }
-              }
             }
           ],
           "outputs": {
@@ -2072,16 +2422,13 @@
             "appGatewayName": {
               "type": "string",
               "value": "[parameters('appGwName')]"
-            },
-            "networkSecurityGroupId": {
-              "type": "string",
-              "value": "[reference(resourceId('Microsoft.Resources/deployments', 'appGatewayNsg'), '2025-04-01').outputs.networkSecurityGroupId.value]"
             }
           }
         }
       },
       "dependsOn": [
-        "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]"
+        "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]",
+        "[resourceId('Microsoft.Resources/deployments', 'appGatewayNetwork')]"
       ]
     }
   ],
@@ -2115,7 +2462,7 @@
     },
     "appGatewayNetworkSecurityGroupId": {
       "type": "string",
-      "value": "[if(parameters('deployAppGateway'), reference(resourceId('Microsoft.Resources/deployments', 'appGateway'), '2025-04-01').outputs.networkSecurityGroupId.value, '')]"
+      "value": "[if(parameters('deployAppGateway'), reference(resourceId('Microsoft.Resources/deployments', 'appGatewayNetwork'), '2025-04-01').outputs.networkSecurityGroupId.value, '')]"
     },
     "applicationInsightsName": {
       "type": "string",
@@ -2125,6 +2472,7 @@
       "type": "object",
       "value": {
         "applicationGatewayEnabled": "[parameters('deployAppGateway')]",
+        "privateNetworkingEnabled": "[variables('privateNetworkingEnabled')]",
         "applicationGatewayName": "[if(parameters('deployAppGateway'), parameters('appGwName'), '')]",
         "applicationGatewayId": "[if(parameters('deployAppGateway'), resourceId('Microsoft.Network/applicationGateways', parameters('appGwName')), '')]",
         "httpsEnabled": "[variables('appGwHttpsReady')]",

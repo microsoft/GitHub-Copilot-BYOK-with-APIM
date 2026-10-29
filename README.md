@@ -31,8 +31,9 @@ without that organization's key does not grant access.
 
 Two defaults matter:
 
-- **APIM remains public.** Its gateway-secret policy rejects direct requests without the correct
-  secret; this is not network isolation.
+- **APIM remains public by default.** Its gateway-secret policy is not network isolation.
+  Optional [private networking](docs/parameters.md#private-networking) keeps the gateway public
+  while making APIM and its Foundry connections private.
 - **WAF starts in Detection mode.** It records rule matches but does not block requests. Review
   coding traffic and tune false positives before enabling Prevention mode.
 

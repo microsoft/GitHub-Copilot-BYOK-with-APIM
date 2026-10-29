@@ -140,6 +140,9 @@ Edit these entries in `infra/my.bicepparam`; do not copy every parameter from th
 | `appGwSharedSecret` | Separate gateway secret from Step 2 |
 
 Leave `deployAppGateway = true` in the starter file. The template also defaults to `true`.
+Leave `enablePrivateNetworking = false` for the default public-backend setup. Set it to
+`true` for a public gateway with private APIM and Foundry connections; see
+[requirements and upgrade notes](parameters.md#private-networking) before enabling it.
 
 Set `foundryAccountSubscriptionId` explicitly, even when Foundry and APIM share a subscription.
 It scopes the backend resource ID and the APIM identity's role assignment; it is not inferred
@@ -166,6 +169,7 @@ deployment subscription.
 | `extraModelIds` | Manually add callable deployments missing from discovery |
 | `defaultTemperatureModelIds` | Normalize Chat Completions temperature to `1` for models that require it |
 | `appGwExistingNsgName` | Preserve an existing gateway subnet NSG in this resource group; manage only the application client rule |
+| `enablePrivateNetworking` | Private APIM and Foundry connections behind the public gateway; requires `Developer` or classic `Premium` |
 
 For all types, defaults, dependencies, and cost notes, see the
 [parameter reference](parameters.md). Keep discovery API versions at their defaults; inference
@@ -271,9 +275,13 @@ Copilot BYOK requires HTTPS. After the first deployment:
    param appGwHttpsPfxPassword = '<the PFX password>'
    ```
 
-5. **Redeploy** using the Step 4 command. HTTPS is inferred from the PFX; no enable flag is needed.
-   Recheck `deploymentSummary`: both `applicationGatewayEnabled` and `httpsEnabled` must be `true`.
-   Port 443 terminates TLS; port 80 redirects to HTTPS.
+5. **Redeploy** using the Step 4 command. By default, Application Gateway is included, and
+   supplying the certificate and password above enables HTTPS automatically. No other settings
+   are needed. Port 443 serves HTTPS; port 80 redirects to HTTPS.
+
+   **Only if you previously changed the defaults:** remove an explicit
+   `appGwEnableHttps = false` override. If you disabled Application Gateway with
+   `deployAppGateway = false`, set it back to `true`.
 
 Use `https://<gateway-host>/byok/<org>` as the client base URL, not the APIM or HTTP output URLs.
 Renew and redeploy the certificate before it expires; renewal is manual unless automated.

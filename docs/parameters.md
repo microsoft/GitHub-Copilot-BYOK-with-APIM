@@ -12,6 +12,7 @@ noted below. `''` means an empty string. Secure values must stay out of source c
 - [Organizations and request limits](#organizations-and-request-limits)
 - [Foundry and model discovery](#foundry-and-model-discovery)
 - [Application Gateway and HTTPS](#application-gateway-and-https)
+- [Private networking](#private-networking)
 - [Token governance](#token-governance)
 - [Observability](#observability)
 - [Content safety](#content-safety)
@@ -87,7 +88,8 @@ and failover checks, see [backend resilience](ai-gateway.md#resilient-multi-foun
 ## Application Gateway and HTTPS
 
 Application Gateway WAF_v2 is enabled by default and adds gateway and public-IP charges.
-APIM remains public; its secret-header policy is not network isolation.
+APIM remains public by default; its secret-header policy alone is not network isolation.
+Use [private networking](#private-networking) for a private APIM gateway and Foundry connections.
 
 Without a certificate, the gateway is HTTP-only for initial setup. Supply both PFX values before
 connecting Copilot or sending keys. An explicit `appGwEnableHttps = false` overrides inference.
@@ -95,6 +97,7 @@ connecting Copilot or sending keys. An explicit `appGwEnableHttps = false` overr
 | Parameter | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `deployAppGateway` | bool | `true` | Deploy the WAF gateway and enforce its secret header in APIM. Set `false` explicitly for APIM-only operation without WAF. |
+| `enablePrivateNetworking` | bool | `false` | Keep the gateway public; inject APIM into an internal VNet and create private Foundry connections. Requires the gateway, `Developer` or classic `Premium`, standard Foundry hostnames, and an empty `appGwAllowedClientIp`. |
 | `appGwName` | string | `'${apimName}-appgw'` | Gateway name; preserve an existing override when upgrading. |
 | `appGwExistingNsgName` | string | `''` | Existing gateway subnet NSG in the deployment resource group. Empty creates and owns `<appGwName>-nsg`; nonempty preserves that NSG and updates only `AllowByokClientIngress`. Set before upgrading a governance-managed deployment. |
 | `appGwSharedSecret` | secure string | `''` | Required when the gateway is enabled; at least 32 characters. Generate separately from org keys and retain for redeployments. |
@@ -103,7 +106,57 @@ connecting Copilot or sending keys. An explicit `appGwEnableHttps = false` overr
 | `appGwEnableHttps` | bool | `!empty(appGwHttpsPfxBase64)` | Enable port 443 and HTTP-to-HTTPS redirect. Requires the gateway and both certificate values. |
 | `appGwHttpsPfxBase64` | secure string | `''` | Base64-encoded, full-chain PFX for the public hostname. Supplying it enables HTTPS by default. |
 | `appGwHttpsPfxPassword` | secure string | `''` | Password for the PFX; required when HTTPS is enabled. |
-| `appGwAllowedClientIp` | string | `''` | Optional APIM IP filter, usually the gateway's public IP after the first deployment. Empty means the gateway-secret check alone. |
+| `appGwAllowedClientIp` | string | `''` | Optional APIM IP filter in public mode, usually the gateway's public IP after the first deployment. Must be empty in private mode, where an NSG restricts gateway traffic by subnet. |
+
+## Private networking
+
+Set `enablePrivateNetworking = true` in your parameter file. No extra mandatory parameters
+are needed. The supported topology is:
+
+```text
+Copilot client -> public HTTPS Application Gateway -> private APIM -> Foundry private endpoint
+```
+
+- Requires `deployAppGateway = true` and `apimSkuName = 'Developer'` (testing) or `'Premium'`
+  (classic production tier). Other tiers, including v2 tiers, remain supported only in public
+  mode by this template; they require a different private-network implementation.
+- APIM uses internal VNet injection, not a public gateway protected only by policy.
+  Application Gateway connects to APIM's private VIP over HTTPS while preserving its hostname
+  for Host/SNI and health probes. The gateway secret and organization keys are still enforced.
+  The Azure-managed APIM control plane retains its required management connectivity.
+- Creates a private endpoint for the primary Foundry account and every distinct pool account,
+  even when the primary is used only for discovery. Private DNS covers Azure OpenAI inference,
+  Cognitive Services, and Foundry project discovery. Accounts must be `OpenAI` or `AIServices`;
+  backend URLs must use their standard account hostnames.
+- Does **not** disable public access on existing Foundry accounts. Other consumers are not
+  changed. Account owners can disable public access separately after testing private connectivity.
+  Alternate Azure ML endpoints, Content Safety, and Redis are not privatized by this flag.
+- The deployer needs permission to create the network and DNS resources and approve private
+  endpoint connections on each account, including accounts in other subscriptions. A pending
+  connection must be approved by its account owner before requests work.
+- The gateway VNet retains its name and `10.50.0.0/16` address space. A shared network module owns
+  its inline subnets: gateway `10.50.0.0/24`, APIM `10.50.1.0/24`, and private endpoints
+  `10.50.2.0/24`. The latter two and the APIM NSG are reserved in public mode too, so reverting
+  to public mode never tries to delete a subnet before APIM detaches. These reservations add no
+  service charges; private endpoints and private DNS add charges when enabled.
+- The APIM subnet NSG permits gateway HTTPS, Azure management/probes, and traffic within the
+  dedicated APIM subnet. Other inbound traffic is denied. Default outbound allowances remain
+  for APIM platform dependencies; this is not an outbound firewall.
+
+Before upgrading an existing deployment, preserve `appGwName` and `appGwExistingNsgName`,
+check address-space/subnet compatibility, clear any `appGwAllowedClientIp`, and review what-if.
+APIM network changes can take 15 minutes or longer; Developer deployments can experience downtime.
+
+Setting the flag back to `false` returns APIM to public mode. Incremental deployments do not
+delete previously created private endpoints or DNS resources: remove those separately after
+checking for other consumers to stop their charges. Do not remove the reserved subnets while
+APIM or an endpoint still uses them.
+
+After deployment, check `deploymentSummary.privateNetworkingEnabled`, confirm every Foundry
+private endpoint is **Approved**, inspect the gateway backend health for the APIM private VIP,
+and test `/byok/<org>/models` plus a completion through the public HTTPS gateway. The
+`apimGatewayUrl` and `orgProxyBasePaths` outputs are APIM addresses, not public client URLs
+in private mode; clients continue using the gateway's HTTPS hostname.
 
 The gateway NSG allows public TCP 80, plus 443 when HTTPS is enabled. Port 80 becomes a
 redirect once HTTPS is enabled; never send credentials over HTTP. New NSGs also allow

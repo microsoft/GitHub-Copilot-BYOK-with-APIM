@@ -180,11 +180,17 @@ APIM identity's principal the `.../onlineEndpoints/score/action` role.
 ## Fronting APIM with an Application Gateway (WAF, enabled by default)
 
 The template defaults to `deployAppGateway = true`, creating an **Application Gateway (WAF_v2)** in
-front of the **still-public** APIM instance and enforcing that traffic arrives through it. This
+front of the **public-by-default** APIM instance and enforcing that traffic arrives through it. This
 adds an OWASP web application firewall and a single controlled ingress without moving APIM onto
 a private network. It incurs Azure charges; set `deployAppGateway = false` explicitly for APIM-only
 deployments without WAF. The gateway name defaults to `<apimName>-appgw`. The shared gateway
 secret must be at least 32 characters and is not generated or rotated by the template.
+
+Set `enablePrivateNetworking = true` to keep this public front door while moving APIM into an
+internal VNet and connecting to primary and pool Foundry accounts through private endpoints
+and private DNS. This requires `Developer` or classic `Premium`; existing Foundry public-access
+settings are not changed. See [private networking](parameters.md#private-networking) for
+prerequisites, costs, and upgrade/reversal notes. The diagram below shows the default public mode.
 
 ```mermaid
 flowchart LR
@@ -208,7 +214,7 @@ legitimate completion). The gateway therefore defaults to **Detection** mode (`a
 which logs matches without blocking. Review the WAF logs, exclude or tune the offending rules
 for the request body, then switch to **Prevention** to enforce.
 
-**What the template creates** (`modules/app-gateway.bicep`): a dedicated VNet + subnet, a
+**What the template creates** (the shared network and gateway modules): a dedicated VNet, a
 static Standard public IP, an explicitly associated subnet NSG, a WAF policy (OWASP 3.2),
 and the Application Gateway itself with a
 backend pool targeting the APIM hostname over HTTPS, a health probe against APIM's
@@ -216,7 +222,9 @@ backend pool targeting the APIM hostname over HTTPS, a health probe against APIM
 listener (the lab uses port 80 for simple testing — a production front end should terminate
 HTTPS with a real certificate, since Copilot BYOK requires HTTPS). Outputs `appGatewayPublicIp`
 and `appGatewayFrontendUrl` give you the address to point clients at and to feed back into
-`appGwAllowedClientIp`.
+`appGwAllowedClientIp` in public mode. In private mode the backend pool uses APIM's private
+VIP with its original Host/SNI, and the APIM subnet NSG restricts client traffic to the
+Application Gateway subnet instead of its public IP.
 
 ### Gateway subnet NSG ownership
 

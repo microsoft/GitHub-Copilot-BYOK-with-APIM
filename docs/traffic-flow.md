@@ -84,8 +84,11 @@ APIM checks two different secrets:
 The path alone grants no access: another organization's path requires that organization's key.
 These checks are APIM policies, not WAF rules.
 
-**APIM remains public.** The gateway-secret check rejects direct requests without the correct
-secret; it is not network isolation. Keep the secret private.
+**APIM remains public by default.** The gateway-secret check rejects direct requests without
+the correct secret; it is not network isolation. Keep the secret private.
+With [`enablePrivateNetworking = true`](parameters.md#private-networking), the client entry
+point remains public but the gateway connects to APIM's internal VIP, and APIM reaches
+configured Foundry accounts through private endpoints and private DNS. Both key checks remain.
 
 For enterprise BYOK, GitHub's **Access > Choose per organization** setting controls model
 availability. APIM receives a shared organization key, not the user's Entra identity. This

@@ -209,6 +209,9 @@ param orgSemanticCacheEnabled object = {}
 @description('Deploy Application Gateway (WAF_v2) and require requests to traverse it. Enabled by default and incurs Azure charges. Set false explicitly for APIM-only deployments without WAF.')
 param deployAppGateway bool = true
 
+@description('Keep Application Gateway public, put APIM in an internal VNet, and add private endpoints/DNS for primary and pool Foundry accounts. Requires deployAppGateway and the Developer or classic Premium APIM tier. Does not change existing Foundry public-access settings.')
+param enablePrivateNetworking bool = false
+
 @description('Application Gateway name. Defaults to <apimName>-appgw.')
 param appGwName string = '${apimName}-appgw'
 
@@ -267,6 +270,12 @@ var chatCompletionsPolicyXml = replace(loadTextContent(chatCompletionsPolicyPath
 var responsesPolicyXml = loadTextContent(responsesPolicyPath)
 var appGwGuardTemplate = loadTextContent(appGwGuardPath)
 var staticModelsTemplate = loadTextContent(staticModelsPath)
+var privateNetworkingEnabled = !enablePrivateNetworking ? false
+  : !deployAppGateway ? fail('Private networking requires deployAppGateway = true.')
+  : !contains(['Developer', 'Premium'], apimSkuName) ? fail('Private networking requires the Developer or classic Premium APIM tier. Other tiers remain supported in public mode.')
+  : !empty(appGwAllowedClientIp) ? fail('Clear appGwAllowedClientIp in private mode. APIM accepts HTTPS from the Application Gateway subnet through its NSG, not the gateway public IP.')
+  : !empty(unsupportedPrivateFoundryEndpoints) ? fail('Private Foundry networking requires standard account hostnames ending in openai.azure.com, cognitiveservices.azure.com, or services.ai.azure.com.')
+  : true
 var validatedAppGwSharedSecret = !deployAppGateway || length(appGwSharedSecret) >= 32
   ? appGwSharedSecret
   : fail('Application Gateway requires appGwSharedSecret with at least 32 characters. Generate it once with openssl rand -hex 32 and keep it for redeployments.')
@@ -335,6 +344,27 @@ var foundryPoolMembersSpec = [for b in foundryBackends: {
   priority: int(b.?priority ?? 1)
   weight: int(b.?weight ?? 1)
 }]
+var primaryFoundryAccount = {
+  accountName: foundryAccountName
+  subscriptionId: foundryAccountSubscriptionId
+  resourceGroup: foundryAccountResourceGroup
+}
+var privateFoundryAccounts = union([primaryFoundryAccount], map(foundryPoolMembersSpec, m => {
+  accountName: m.accountName
+  subscriptionId: m.subscriptionId
+  resourceGroup: m.resourceGroup
+}))
+var privateFoundryEndpoints = concat([
+  {
+    accountName: foundryAccountName
+    baseUrl: normalizedFoundryBackendBaseUrl
+  }
+], foundryPoolMembersSpec)
+var unsupportedPrivateFoundryEndpoints = filter(privateFoundryEndpoints, endpoint => !contains([
+  'https://${toLower(endpoint.accountName)}.openai.azure.com'
+  'https://${toLower(endpoint.accountName)}.cognitiveservices.azure.com'
+  'https://${toLower(endpoint.accountName)}.services.ai.azure.com'
+], toLower(endpoint.baseUrl)))
 // RBAC targets: the single primary when no pool, else every pool member account.
 var foundryRbacTargets = useFoundryPool ? map(foundryPoolMembersSpec, m => {
   accountName: m.accountName
@@ -362,7 +392,14 @@ resource apim 'Microsoft.ApiManagement/service@2023-05-01-preview' = {
   properties: {
     publisherName: apimPublisherName
     publisherEmail: apimPublisherEmail
+    virtualNetworkType: privateNetworkingEnabled ? 'Internal' : 'None'
+    virtualNetworkConfiguration: privateNetworkingEnabled ? {
+      subnetResourceId: appGatewayNetwork!.outputs.apimSubnetId
+    } : null
   }
+  dependsOn: [
+    foundryPrivateNetwork
+  ]
 }
 
 // Single Foundry backend (default). Replaced by a pool when foundryBackends is set.
@@ -801,14 +838,38 @@ resource embeddingsBackend 'Microsoft.ApiManagement/service/backends@2023-05-01-
   }
 }
 
-// Application Gateway is the default front door; APIM-only deployments explicitly opt out.
+module appGatewayNetwork 'modules/gateway-network.bicep' = if (deployAppGateway) {
+  name: 'appGatewayNetwork'
+  params: {
+    location: location
+    appGwName: appGwName
+    existingNsgName: appGwExistingNsgName
+    enableHttps: appGwHttpsReady
+    tags: tags
+  }
+}
+
+module foundryPrivateNetwork 'modules/foundry-private-network.bicep' = if (privateNetworkingEnabled) {
+  name: 'foundryPrivateNetwork'
+  params: {
+    location: location
+    namePrefix: appGwName
+    vnetId: appGatewayNetwork!.outputs.vnetId
+    subnetId: appGatewayNetwork!.outputs.privateEndpointSubnetId
+    foundryAccounts: privateFoundryAccounts
+    tags: tags
+  }
+}
+
+// Application Gateway is the public front door in both networking modes.
 module appGateway 'modules/app-gateway.bicep' = if (deployAppGateway) {
   name: 'appGateway'
   params: {
     location: location
     appGwName: appGwName
-    existingNsgName: appGwExistingNsgName
+    subnetResourceId: appGatewayNetwork!.outputs.appGatewaySubnetId
     apimGatewayHost: '${apimName}.azure-api.net'
+    apimGatewayPrivateIp: privateNetworkingEnabled ? apim.properties.privateIPAddresses[0] : ''
     sharedSecret: validatedAppGwSharedSecret
     wafMode: appGwWafMode
     capacity: appGwCapacity
@@ -817,9 +878,6 @@ module appGateway 'modules/app-gateway.bicep' = if (deployAppGateway) {
     httpsPfxPassword: appGwHttpsPfxPassword
     tags: tags
   }
-  dependsOn: [
-    apim
-  ]
 }
 
 output apimGatewayUrl string = 'https://${apimName}.azure-api.net'
@@ -833,10 +891,11 @@ output orgProxyBasePaths array = [
 output backendCompletionUrl string = '${normalizedFoundryBackendBaseUrl}/openai/v1/chat/completions?api-version=${foundryApiVersion}'
 output appGatewayPublicIp string = deployAppGateway ? appGateway!.outputs.publicIpAddress : ''
 output appGatewayFrontendUrl string = deployAppGateway ? appGateway!.outputs.frontendUrl : ''
-output appGatewayNetworkSecurityGroupId string = deployAppGateway ? appGateway!.outputs.networkSecurityGroupId : ''
+output appGatewayNetworkSecurityGroupId string = deployAppGateway ? appGatewayNetwork!.outputs.networkSecurityGroupId : ''
 output applicationInsightsName string = deployObservability ? observability!.outputs.appInsightsName : ''
 output deploymentSummary object = {
   applicationGatewayEnabled: deployAppGateway
+  privateNetworkingEnabled: privateNetworkingEnabled
   applicationGatewayName: deployAppGateway ? appGwName : ''
   applicationGatewayId: deployAppGateway ? resourceId('Microsoft.Network/applicationGateways', appGwName) : ''
   httpsEnabled: appGwHttpsReady

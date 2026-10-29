@@ -6,26 +6,17 @@ param location string = resourceGroup().location
 @description('Name of the Application Gateway.')
 param appGwName string
 
-@description('Existing NSG in this resource group. Empty creates <appGwName>-nsg; nonempty preserves the existing NSG and manages only the application client rule.')
-param existingNsgName string = ''
-
-@description('Name of the VNet created for the Application Gateway.')
-param vnetName string = '${appGwName}-vnet'
-
-@description('Address space for the App Gateway VNet.')
-param vnetAddressPrefix string = '10.50.0.0/16'
-
-@description('Name of the dedicated App Gateway subnet.')
-param subnetName string = 'appgw-subnet'
-
-@description('Address prefix for the dedicated App Gateway subnet (v2 requires a subnet with no other resources, /24 recommended).')
-param subnetAddressPrefix string = '10.50.0.0/24'
+@description('Resource ID of the dedicated Application Gateway subnet.')
+param subnetResourceId string
 
 @description('Name of the public IP fronting the Application Gateway.')
 param publicIpName string = '${appGwName}-pip'
 
 @description('Public hostname of the APIM gateway, for example my-apim.azure-api.net. Used as the backend target and Host/SNI.')
 param apimGatewayHost string
+
+@description('APIM internal virtual IP in private mode. Empty uses the public gateway hostname.')
+param apimGatewayPrivateIp string = ''
 
 @description('Shared secret injected as the X-AppGw-Secret header on every forwarded request. APIM validates it to block direct (bypass) callers.')
 @secure()
@@ -250,42 +241,6 @@ resource publicIp 'Microsoft.Network/publicIPAddresses@2022-07-01' = {
   }
 }
 
-module networkSecurityGroup 'app-gateway-nsg.bicep' = {
-  name: 'appGatewayNsg'
-  params: {
-    location: location
-    nsgName: empty(existingNsgName) ? '${appGwName}-nsg' : existingNsgName
-    reuseExisting: !empty(existingNsgName)
-    subnetAddressPrefix: subnetAddressPrefix
-    enableHttps: enableHttps
-    tags: tags
-  }
-}
-
-resource vnet 'Microsoft.Network/virtualNetworks@2023-11-01' = {
-  name: vnetName
-  location: location
-  tags: tags
-  properties: {
-    addressSpace: {
-      addressPrefixes: [
-        vnetAddressPrefix
-      ]
-    }
-    subnets: [
-      {
-        name: subnetName
-        properties: {
-          addressPrefix: subnetAddressPrefix
-          networkSecurityGroup: {
-            id: networkSecurityGroup.outputs.networkSecurityGroupId
-          }
-        }
-      }
-    ]
-  }
-}
-
 resource appGateway 'Microsoft.Network/applicationGateways@2023-11-01' = {
   name: appGwName
   location: location
@@ -301,7 +256,7 @@ resource appGateway 'Microsoft.Network/applicationGateways@2023-11-01' = {
         name: 'appGwIpConfig'
         properties: {
           subnet: {
-            id: '${vnet.id}/subnets/${subnetName}'
+            id: subnetResourceId
           }
         }
       }
@@ -323,8 +278,10 @@ resource appGateway 'Microsoft.Network/applicationGateways@2023-11-01' = {
         name: backendPoolName
         properties: {
           backendAddresses: [
-            {
+            empty(apimGatewayPrivateIp) ? {
               fqdn: apimGatewayHost
+            } : {
+              ipAddress: apimGatewayPrivateIp
             }
           ]
         }
@@ -356,7 +313,9 @@ resource appGateway 'Microsoft.Network/applicationGateways@2023-11-01' = {
           port: 443
           protocol: 'Https'
           cookieBasedAffinity: 'Disabled'
-          pickHostNameFromBackendAddress: true
+          // Preserve APIM Host/SNI even when the backend address is a private IP.
+          pickHostNameFromBackendAddress: false
+          hostName: apimGatewayHost
           requestTimeout: 120
           probe: {
             id: '${appGwId}/probes/${probeName}'
@@ -399,4 +358,3 @@ output publicIpAddress string = publicIp.properties.ipAddress
 output frontendUrl string = 'http://${publicIp.properties.ipAddress}'
 output httpsEnabled bool = enableHttps
 output appGatewayName string = appGateway.name
-output networkSecurityGroupId string = networkSecurityGroup.outputs.networkSecurityGroupId

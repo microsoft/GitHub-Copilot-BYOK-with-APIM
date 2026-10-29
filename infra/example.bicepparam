@@ -19,6 +19,9 @@ param appGwSharedSecret = '<gateway-secret>'
 // Recommended setup: Application Gateway + WAF. Set false only for APIM-only deployments.
 param deployAppGateway = true
 
+// Optional: public gateway with private APIM and Foundry connections (Developer or classic Premium).
+param enablePrivateNetworking = false
+
 // New deployments create <appGwName>-nsg. To preserve a governance-owned NSG in this
 // resource group, set its existing name before redeploying. Only the client rule is managed.
 // param appGwExistingNsgName = 'your-existing-appgw-nsg'
@@ -27,8 +30,9 @@ param deployAppGateway = true
 // from foundryAccountName. Uncomment only for a nonstandard Foundry endpoint:
 // param foundryBackendBaseUrl = 'https://your-custom-endpoint'
 
-// HTTPS: after creating DNS and obtaining a password-protected full-chain PFX, supply both.
-// HTTPS is enabled automatically when appGwHttpsPfxBase64 is set.
+// HTTPS: after creating DNS and obtaining a password-protected full-chain PFX,
+// supply appGwHttpsPfxBase64 and appGwHttpsPfxPassword. HTTPS enables automatically;
+// no appGwEnableHttps = true setting is needed. Remove any explicit false override.
 // param appGwHttpsPfxBase64 = '<base64-encoded-pfx>'
 // param appGwHttpsPfxPassword = '<pfx-password>'
 
