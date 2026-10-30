@@ -7,6 +7,18 @@
     <set-body><![CDATA[@{
         var body = context.Request.Body.As<JObject>(preserveContent: true);
 
+        var useOpenAiTokenLimit = __NORMALIZE_OPENAI_TOKEN_LIMITS__;
+        var legacyMaxTokens = body["max_tokens"];
+        if (useOpenAiTokenLimit && legacyMaxTokens != null)
+        {
+            var maxCompletionTokens = body["max_completion_tokens"];
+            if (maxCompletionTokens == null || maxCompletionTokens.Type == JTokenType.Null)
+            {
+                body["max_completion_tokens"] = legacyMaxTokens;
+            }
+            body.Remove("max_tokens");
+        }
+
         var model = (string)body["model"];
         var defaultTemperatureModels = new string[] { __DEFAULT_TEMPERATURE_MODELS_JSON__ };
         var requiresDefaultTemperature = false;

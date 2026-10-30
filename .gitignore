@@ -4,6 +4,10 @@
 ## Get latest from https://github.com/github/gitignore/blob/main/VisualStudio.gitignore
 
 /infra/my.bicepparam
+/infra/*.bak
+
+# Local Azure state and generated deployment files
+.azure/
 
 # Local Azure state and generated deployment files
 .azure/
@@ -272,6 +276,7 @@ ClientBin/
 *.dbproj.schemaview
 *.jfm
 *.pfx
+pfx.b64.txt
 *.publishsettings
 orleans.codegen.cs
 

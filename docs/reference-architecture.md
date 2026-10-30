@@ -3,6 +3,8 @@
 > New to the project? Start with the **[getting started guide](getting-started.md)** to
 > deploy the gateway, then come back here for the design details.
 
+For configuration defaults and dependencies, see the [parameter reference](parameters.md).
+
 ```mermaid
 flowchart LR
   subgraph Clients["Copilot BYOK surfaces"]
@@ -53,8 +55,8 @@ org an isolated, independently rotatable credential on shared infrastructure.
 
 ## Per-organization multi-tenant BYOK
 
-The gateway is **multi-tenant by organization** (`infra/main.bicep`, driven by the `orgs`
-array and `orgKeys` map). It stamps out an independent slice per organization so you can
+The gateway is **multi-tenant by organization** (`infra/main.bicep`, with `orgs` inferred from
+the `orgKeys` map unless overridden). It stamps out an independent slice per organization so you can
 attribute, throttle, and rotate credentials **per org** on a single shared APIM instance —
 no extra gateways. (A single-org deployment is just this with one entry in `orgs`.)
 
@@ -175,12 +177,20 @@ always `403`. In that case the endpoint owner must expose a **key-based** endpoi
 key is injected by policy instead. Same-tenant endpoints just need the owner to grant the
 APIM identity's principal the `.../onlineEndpoints/score/action` role.
 
-## Fronting APIM with an Application Gateway (WAF, optional)
+## Fronting APIM with an Application Gateway (WAF, enabled by default)
 
-When `deployAppGateway = true`, the template stands up an **Application Gateway (WAF_v2)** in
-front of the **still-public** APIM instance and enforces that traffic arrives through it. This
+The template defaults to `deployAppGateway = true`, creating an **Application Gateway (WAF_v2)** in
+front of the **public-by-default** APIM instance and enforcing that traffic arrives through it. This
 adds an OWASP web application firewall and a single controlled ingress without moving APIM onto
-a private network (which would break server-side callers such as GitHub Enterprise BYOK).
+a private network. It incurs Azure charges; set `deployAppGateway = false` explicitly for APIM-only
+deployments without WAF. The gateway name defaults to `<apimName>-appgw`. The shared gateway
+secret must be at least 32 characters and is not generated or rotated by the template.
+
+Set `enablePrivateNetworking = true` to keep this public front door while moving APIM into an
+internal VNet and connecting to primary and pool Foundry accounts through private endpoints
+and private DNS. This requires `Developer` or classic `Premium`; existing Foundry public-access
+settings are not changed. See [private networking](parameters.md#private-networking) for
+prerequisites, costs, and upgrade/reversal notes. The diagram below shows the default public mode.
 
 ```mermaid
 flowchart LR
@@ -204,38 +214,76 @@ legitimate completion). The gateway therefore defaults to **Detection** mode (`a
 which logs matches without blocking. Review the WAF logs, exclude or tune the offending rules
 for the request body, then switch to **Prevention** to enforce.
 
-**What the template creates** (`modules/app-gateway.bicep`): a dedicated VNet + subnet, a
-static Standard public IP, a WAF policy (OWASP 3.2), and the Application Gateway itself with a
+**What the template creates** (the shared network and gateway modules): a dedicated VNet, a
+static Standard public IP, an explicitly associated subnet NSG, a WAF policy (OWASP 3.2),
+and the Application Gateway itself with a
 backend pool targeting the APIM hostname over HTTPS, a health probe against APIM's
 `/status-0123456789abcdef` endpoint, the secret-injecting rewrite rule set, and an HTTP
 listener (the lab uses port 80 for simple testing — a production front end should terminate
 HTTPS with a real certificate, since Copilot BYOK requires HTTPS). Outputs `appGatewayPublicIp`
 and `appGatewayFrontendUrl` give you the address to point clients at and to feed back into
-`appGwAllowedClientIp`.
+`appGwAllowedClientIp` in public mode. In private mode the backend pool uses APIM's private
+VIP with its original Host/SNI, and the APIM subnet NSG restricts client traffic to the
+Application Gateway subnet instead of its public IP.
+
+### Gateway subnet NSG ownership
+
+Fresh deployments create `<appGwName>-nsg`. Its custom rules allow public TCP to the
+active listeners (80 during bootstrap; 80 and 443 with HTTPS) and GatewayManager TCP
+65200-65535. Azure's default AzureLoadBalancer and outbound allowances remain intact.
+Public HTTPS is required because enterprise BYOK calls need not originate from the
+user's workstation. APIM still enforces the gateway secret and organization key.
+
+For an NSG owned by governance, set `appGwExistingNsgName` to its name in the deployment
+resource group before redeploying. The standalone
+[NSG module](../infra/modules/app-gateway-nsg.bicep) then manages only
+`AllowByokClientIngress`, at inbound priority 1000, without redeploying the NSG parent
+or replacing its other rules. The VNet's inline subnet declaration retains that NSG
+association. Inspect name/priority collisions and required infrastructure rules first.
+Output `appGatewayNetworkSecurityGroupId` reports the selected NSG.
+
+The default new-NSG mode owns the entire custom rule collection; it is not an adoption
+mechanism for an externally managed NSG. Incremental ARM deployment does not preserve
+unspecified parent properties. Coordinate rule retention with governance automation;
+neither restarting the gateway nor deploying IaC prevents another controller from
+changing network rules afterward. See the [network recovery runbook](traffic-flow.md#healthy-backend-but-public-connections-fail).
+
+### Chat API request compatibility
+
+The chat operation normalizes deprecated `max_tokens` to `max_completion_tokens` for
+the Foundry OpenAI backend. The same numeric budget is retained, and an explicit
+canonical value wins if both fields are present. This applies automatically to every
+chat deployment/alias on that backend, without model-name heuristics or a maintained
+allowlist. Alternate Cohere/managed-compute routes retain their legacy contract.
+The Responses API is unchanged. The [executable policy tests](../tests/chat-request-compatibility.ps1)
+compile the actual request-rewrite expression and verify budgets, field precedence,
+unrelated fields, existing tool behavior, and alternate-backend preservation.
 
 ### HTTPS listener (optional)
 
-Set `appGwEnableHttps = true` to add a 443 listener terminating TLS at the gateway, with an
+Supplying `appGwHttpsPfxBase64` enables HTTPS automatically, adding a 443 listener with an
 automatic **HTTP→HTTPS 301 redirect** (the HTTP:80 listener stops proxying and only redirects).
 The certificate is supplied as a base64-encoded PFX (full chain) directly on the gateway via
 `appGwHttpsPfxBase64` + `appGwHttpsPfxPassword` — no Key Vault or managed identity required, which
 keeps it working in subscriptions whose policy forces Key Vaults to private-only networking.
+Both certificate values are required. An explicit `appGwEnableHttps = false` overrides inference;
+remove it when upgrading an older parameter file.
 
-A free 90-day Let's Encrypt cert works well here. Issue it once with Posh-ACME (DNS-01), export
-the full-chain PFX, then base64-encode it into the params file:
+For a free Let's Encrypt certificate, follow the [Windows/Posh-ACME guide](lets-encrypt.md).
+It uses DNS-01 validation and generates the full-chain PFX to base64-encode into the params file:
 
 ```powershell
 $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes('fullchain.pfx'))
 ```
 
-Because the PFX lives in the deployment rather than Key Vault, renewal is a manual re-issue +
-redeploy every ~90 days. For hands-off rotation, front the gateway with a Key Vault reference and
+Because the PFX lives in the deployment rather than Key Vault, renew the certificate and redeploy
+before it expires. For hands-off rotation, front the gateway with a Key Vault reference and
 Acmebot instead (requires DNS the ACME client can automate and a Key Vault the gateway identity
 can reach).
 
 **Wiring it up end to end.** The listener alone isn't enough — you also need a DNS record for
 your hostname pointing at the gateway's public IP and a certificate issued for that hostname. The
-step-by-step flow (get the IP, add the `A` record, issue the cert, set `appGwEnableHttps`, redeploy,
+step-by-step flow (get the IP, add the `A` record, supply the certificate, redeploy,
 point clients at your hostname) is in the [getting started guide](getting-started.md#production-enable-https-on-the-app-gateway).
 
 One design note that trips people up: the `appGatewayFrontendUrl` and `orgProxyBasePaths` outputs
