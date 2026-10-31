@@ -8,12 +8,24 @@ routing, and limits for multiple GitHub organizations on one shared gateway.
 
 ## Contents
 
+- [Why use this](#why-use-this)
 - [How it works](#how-it-works)
 - [Supported clients](#supported-clients)
 - [Get started](#get-started)
 - [Configure enterprise BYOK](#configure-enterprise-byok)
 - [Documentation](#documentation)
 - [Further reading](#further-reading)
+
+## Why use this
+
+- **Use existing capacity.** Route Copilot BYOK requests to a compatible Foundry deployment
+  backed by provisioned throughput units (PTUs), using capacity you already pay for.
+- **Control the inference region.** Route BYOK requests to regional Azure model deployments
+  to meet inference location requirements. Choose a deployment type that keeps processing
+  in the required region; global deployments do not provide this restriction.
+- **Manage usage costs.** Move supported Copilot requests to Azure model billing and use
+  per-organization limits and optional token metrics to control and track consumption.
+  Azure model and gateway charges still apply.
 
 ## How it works
 
