@@ -453,7 +453,8 @@ try {
     if ($deployment.properties.provisioningState -ne 'Succeeded') { throw 'Main deployment did not succeed.' }
     if (-not (Assert-Approved $endpoints)) { return [pscustomobject]@{ Status = 'AwaitingApproval'; ReadyForCopilot = $false; StatePath = $statePath } }
     $apim = Invoke-Az 'verifying internal APIM' @('apim', 'show', '--subscription', $SubscriptionId, '--resource-group', $ResourceGroup, '--name', $p.apimName)
-    if ($apim.virtualNetworkType -ne 'Internal' -or @($apim.privateIPAddresses).Count -eq 0) { throw 'APIM is not provisioned with an internal private IP.' }
+    $privateAddresses = @($apim['privateIpAddresses'] | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($apim.virtualNetworkType -ne 'Internal' -or $privateAddresses.Count -eq 0) { throw 'APIM is not provisioned with an internal private IP.' }
     foreach ($endpoint in $endpoints) {
         $name = ($endpoint.id -split '/')[-1]
         $groups = @(Invoke-Az 'verifying endpoint DNS zone group' @('network', 'private-endpoint', 'dns-zone-group', 'list', '--subscription', $SubscriptionId, '--resource-group', $ResourceGroup, '--endpoint-name', $name))

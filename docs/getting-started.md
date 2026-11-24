@@ -73,6 +73,10 @@ Rerun without the original parameter file to reuse saved values; importing a fil
 explicitly overrides saved values. `-GenerateKeys` only fills missing keys; it never rotates
 existing ones. For multiple separate deployments, use separate resource groups.
 
+If verification fails after provisioning, inspect the reported error and the Azure deployment
+status. After correcting the cause, rerun with the same gateway subscription/resource group
+to reuse saved settings and keys; do not delete successful resources just to retry verification.
+
 For an existing deployment, supply its private parameter file instead:
 
 ```powershell

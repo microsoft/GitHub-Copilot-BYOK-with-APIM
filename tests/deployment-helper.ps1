@@ -59,6 +59,7 @@ function Reset-Mock {
         ProgressJobs = [System.Collections.Generic.List[object]]::new()
         ProgressCompletions = [System.Collections.Generic.List[string]]::new()
         DelayCommand = ''
+        Apim = @{ virtualNetworkType = 'Internal'; privateIpAddresses = @('10.50.1.4') }
     }
     Save-Input
 }
@@ -142,7 +143,7 @@ function az {
             }
             break
         }
-        '^apim show ' { @{ virtualNetworkType = 'Internal'; privateIPAddresses = @('10.50.1.4') }; break }
+        '^apim show ' { $mock.Apim; break }
         '^network private-endpoint dns-zone-group list ' {
             ,@(@{ privateDnsZoneConfigs = @(@{ privateDnsZoneId = '/subscriptions/gateway-sub/resourceGroups/gateway-rg/providers/Microsoft.Network/privateDnsZones/privatelink.openai.azure.com' }) })
             break
@@ -321,6 +322,17 @@ try {
         $mock.Approval = $status
         Assert-Throws { & $helper @target } $status
         Assert-Equal ($mock.Deployments -contains 'main') $false 'Rejected/disconnected connections must block main deployment.'
+    }
+
+    foreach ($addresses in @(@{ value = @() }, @{ value = $null }, @{ value = @('') }, @{})) {
+        Reset-Mock
+        if ($addresses.ContainsKey('value')) {
+            $mock.Apim.privateIpAddresses = $addresses.value
+        } else {
+            $mock.Apim.Remove('privateIpAddresses')
+        }
+        Assert-Throws { & $helper @target } '^APIM is not provisioned with an internal private IP\.$'
+        Assert-Equal $mock.Requests.Count 0 'Missing private addresses must block readiness verification.'
     }
 
     Reset-Mock
