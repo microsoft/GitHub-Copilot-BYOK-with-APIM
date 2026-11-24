@@ -180,22 +180,25 @@ APIM identity's principal the `.../onlineEndpoints/score/action` role.
 ## Fronting APIM with an Application Gateway (WAF, enabled by default)
 
 The template defaults to `deployAppGateway = true`, creating an **Application Gateway (WAF_v2)** in
-front of the **public-by-default** APIM instance and enforcing that traffic arrives through it. This
-adds an OWASP web application firewall and a single controlled ingress without moving APIM onto
-a private network. It incurs Azure charges; set `deployAppGateway = false` explicitly for APIM-only
+front of the **internal-by-default** APIM instance and enforcing that traffic arrives through it. This
+adds an OWASP web application firewall and a single public ingress to private backends.
+It incurs Azure charges; set both `deployAppGateway = false` and `enablePrivateNetworking = false` for APIM-only
 deployments without WAF. The gateway name defaults to `<apimName>-appgw`. The shared gateway
 secret must be at least 32 characters and is not generated or rotated by the template.
 
-Set `enablePrivateNetworking = true` to keep this public front door while moving APIM into an
+The default `enablePrivateNetworking = true` keeps this public front door while moving APIM into an
 internal VNet and connecting to primary and pool Foundry accounts through private endpoints
 and private DNS. This requires `Developer` or classic `Premium`; existing Foundry public-access
-settings are not changed. See [private networking](parameters.md#private-networking) for
-prerequisites, costs, and upgrade/reversal notes. The diagram below shows the default public mode.
+settings are not changed, including when public access is already Disabled.
+The [guided helper](getting-started.md#guided-deployment-recommended) prepares private connections
+and pauses for owner approval before deploying APIM. It only generates missing keys with explicit
+consent and preserves them on reruns. See [private networking](parameters.md#private-networking)
+for prerequisites, costs, and upgrade/reversal notes. The diagram below shows the default private backends.
 
 ```mermaid
 flowchart LR
     Caller["Copilot / GitHub caller"] -->|HTTPS| AGW["App Gateway WAF_v2<br/>public frontend"]
-    AGW -->|"rewrite sets X-AppGw-Secret"| APIM["APIM (public)<br/>/byok/&lt;org&gt;"]
+    AGW -->|"private HTTPS; X-AppGw-Secret"| APIM["APIM (internal VNet)<br/>/byok/&lt;org&gt;"]
     APIM -->|managed identity| Foundry["Foundry deployment"]
     Direct["Direct bypass attempt"] -. "no secret → 403" .-> APIM
 ```

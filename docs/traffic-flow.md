@@ -84,11 +84,19 @@ APIM checks two different secrets:
 The path alone grants no access: another organization's path requires that organization's key.
 These checks are APIM policies, not WAF rules.
 
-**APIM remains public by default.** The gateway-secret check rejects direct requests without
-the correct secret; it is not network isolation. Keep the secret private.
-With [`enablePrivateNetworking = true`](parameters.md#private-networking), the client entry
+**APIM and Foundry connections are private by default.** The gateway-secret check remains
+defense in depth; keep the secret private.
+With the default [`enablePrivateNetworking = true`](parameters.md#private-networking), the client entry
 point remains public but the gateway connects to APIM's internal VIP, and APIM reaches
 configured Foundry accounts through private endpoints and private DNS. Both key checks remain.
+Foundry public access may already be Disabled; no deployment step enables it.
+For pending approval, ask the Foundry owner to approve the reported endpoint and resume the
+[guided helper](getting-started.md#guided-deployment-recommended). Rejected/disconnected
+connections need owner action. Approval does not replace APIM's managed-identity role assignment.
+If Foundry calls fail after approval, verify that its standard hostname resolves to the endpoint's
+private IP from the APIM network (using APIM network diagnostics or a network-connected test host).
+A laptop's public DNS result does not test the private DNS path.
+Explicit public mode retains a publicly reachable APIM and must not be confused with isolation.
 
 For enterprise BYOK, GitHub's **Access > Choose per organization** setting controls model
 availability. APIM receives a shared organization key, not the user's Entra identity. This

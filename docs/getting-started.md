@@ -4,7 +4,8 @@ Deploy an HTTPS gateway for your existing Microsoft Foundry models, then connect
 Each GitHub organization gets its own `/byok/<org>` path, key, and policy on one shared gateway.
 For the design, see the [reference architecture](reference-architecture.md).
 
-**Default setup: Application Gateway (WAF_v2) + APIM.** Application Gateway incurs Azure charges.
+**Default setup: public Application Gateway (WAF_v2) + internal APIM + Foundry private endpoints.**
+APIM, Application Gateway, private endpoints, and private DNS incur Azure charges.
 The first deployment creates the gateway; adding a certificate enables HTTPS. Do not connect
 Copilot or send keys until HTTPS is verified.
 
@@ -14,7 +15,8 @@ Commands use Bash unless labeled PowerShell. Replace angle-bracketed placeholder
 
 - An Azure subscription and permission to create resources and assign roles. You need
   `Microsoft.Authorization/roleAssignments/write` on the Foundry account, even if it is in
-  another subscription.
+  another subscription. Private endpoints also need account-owner approval, automatic or manual.
+  Approval does not grant APIM its separate Foundry data-plane role.
 - An existing Foundry / Azure OpenAI account with a model deployment supporting **tool calling**
   and **streaming**. A context window of at least **128k tokens** is recommended.
 - [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli), Git, and either
@@ -30,6 +32,99 @@ az login
 az account set --subscription <target-subscription-id>
 ```
 
+## Guided deployment (recommended)
+
+After cloning this repository, run in PowerShell 7.2+:
+
+```powershell
+.\scripts\deploy.ps1 `
+  -FoundryResourceId '/subscriptions/<foundry-subscription>/resourceGroups/<foundry-rg>/providers/Microsoft.CognitiveServices/accounts/<account>'
+```
+
+The [helper](../scripts/deploy.ps1) prompts for the gateway subscription, resource group,
+region, APIM name/contact, organization slugs, and permission to generate missing keys.
+It confirms the target and charges before provisioning. Keys are not printed.
+`DEPLOY` and `APPLY` confirmations ignore capitalization and surrounding spaces.
+Typos prompt again; press Enter or type `CANCEL` to cancel.
+While Azure CLI commands run, PowerShell shows the operation name, an animated spinner,
+and elapsed time. The indicator clears on completion or error; it shows activity, not a
+completion percentage. `-NonInteractive` or `$ProgressPreference = 'SilentlyContinue'`
+disables the indicator.
+Keep Developer for testing; supply `-ApimSkuName Premium` for classic Premium production
+networking. StandardV2 and PremiumV2 are not supported by this private-network implementation.
+
+The helper reuses your Foundry account and models. **Foundry public access may already be
+Disabled and stays unchanged.** Setup uses Azure Resource Manager, not direct model calls
+from your laptop. You do not need a VPN into the new VNet for setup, provided ARM is reachable.
+Azure Policy must allow the public gateway and dedicated VNet/private endpoints.
+Reusing centrally managed networks or DNS requires a separate deployment design.
+
+For owner approval, add `-ManualApproval`. The helper creates the private connection request,
+returns `Status = AwaitingApproval` and `ReadyForCopilot = false`, and does not deploy APIM yet.
+Ask the Foundry owner to approve the reported endpoint under **Networking > Private endpoint
+connections**, then rerun with the same gateway subscription/resource group. Rejected or
+disconnected endpoints require owner action, not repeated deployments or public access.
+Foundry RBAC assignment permissions are required independently of approval.
+
+Settings and keys are stored in the ignored `.azure\deploy\<subscription>\<resource-group>\state.json`
+with user-only filesystem permissions. This file contains plaintext secrets: protect it and
+its backups, do not share it or record its contents in transcripts, and retain it for reruns.
+Rerun without the original parameter file to reuse saved values; importing a file again
+explicitly overrides saved values. `-GenerateKeys` only fills missing keys; it never rotates
+existing ones. For multiple separate deployments, use separate resource groups.
+
+For an existing deployment, supply its private parameter file instead:
+
+```powershell
+.\scripts\deploy.ps1 -SubscriptionId '<gateway-subscription>' `
+  -ResourceGroup '<gateway-rg>' -ParameterFile .\infra\my.bicepparam -Preview
+```
+
+`-Preview` (or `-WhatIf`) performs read-only preflight: no resource creation, key generation,
+state writes, provider registration, or subscription-context changes. It is not a full ARM
+what-if. Actual deployment validates and displays resource-ID-only what-if changes for each
+stage before applying it. Provider validation/policy may still reject a deployment.
+The helper refuses deletions; use the manual path for complex migrations.
+
+Preserve gateway names, attached NSG selection, secrets, and connection mode.
+For an existing public APIM, review [migration requirements](parameters.md#private-networking),
+set private networking true in its parameters, and explicitly add `-AllowPublicMigration`.
+APIM network changes can interrupt service. `-NonInteractive` requires all necessary inputs
+and skips interactive confirmation, so use it only after reviewing the target and changes.
+Missing provider registrations in another subscription require owner action in that mode.
+
+### Complete HTTPS and verify
+
+Infrastructure-only bootstrap returns `AwaitingHttps`, not a ready gateway. Set your public
+hostname's A record to the reported gateway IP, obtain a [trusted full-chain PFX](lets-encrypt.md),
+then rerun:
+
+```powershell
+$password = Read-Host 'PFX password' -AsSecureString
+.\scripts\deploy.ps1 -SubscriptionId '<gateway-subscription>' -ResourceGroup '<gateway-rg>' `
+  -Hostname 'copilot.example.com' -PfxPath 'C:\certificates\fullchain.pfx' `
+  -PfxPassword $password -Model '<deployment-name>'
+```
+
+The helper verifies endpoint approval, internal APIM, DNS attachments, and gateway health.
+Only trusted HTTPS, nonempty `/models` discovery, and a successful completion for each selected
+organization produce `Verified` / `ReadyForCopilot = true`. A model permitted to all selected
+organizations is required for this combined check; use the manual client checks for different
+per-org models. Missing model selection returns `AwaitingModelVerification`; other verification
+failures are errors. No credentials or model traffic are sent over HTTP or followed redirects.
+DNS links alone do not prove private name resolution: if inference fails, use
+[network troubleshooting](traffic-flow.md#common-failure-points) and APIM diagnostics.
+
+The helper accepts resolved JSON parameters or compiles `.bicepparam` with Bicep.
+Key Vault parameter references and explicit public/APIM-only topologies use the manual path below.
+Advanced settings, including backend pools, are retained; all primary/pool accounts require
+private endpoint approval. Optional Azure ML endpoints, Content Safety, and Redis are not
+privatized by the networking flag.
+
+## Manual deployment
+
+Use the following steps when you prefer to manage parameters and Azure CLI commands directly.
+
 ### Register the Azure resource providers
 
 Register the providers for APIM and Application Gateway in the selected subscription:
@@ -38,6 +133,9 @@ Register the providers for APIM and Application Gateway in the selected subscrip
 az provider register --namespace Microsoft.ApiManagement --wait
 az provider register --namespace Microsoft.Network --wait
 ```
+
+Also register `Microsoft.Network` and `Microsoft.CognitiveServices` in the subscription
+containing each existing Foundry account. Ask its owner if you lack subscription permissions.
 
 For optional features, register these providers with the same command:
 
@@ -140,8 +238,8 @@ Edit these entries in `infra/my.bicepparam`; do not copy every parameter from th
 | `appGwSharedSecret` | Separate gateway secret from Step 2 |
 
 Leave `deployAppGateway = true` in the starter file. The template also defaults to `true`.
-Leave `enablePrivateNetworking = false` for the default public-backend setup. Set it to
-`true` for a public gateway with private APIM and Foundry connections; see
+Leave `enablePrivateNetworking = true` for the default internal APIM and private Foundry
+connections behind the public gateway; see
 [requirements and upgrade notes](parameters.md#private-networking) before enabling it.
 
 Set `foundryAccountSubscriptionId` explicitly, even when Foundry and APIM share a subscription.
@@ -162,14 +260,15 @@ deployment subscription.
 
 | Parameter | Purpose |
 | --- | --- |
-| `apimSkuName` / `apimSkuCapacity` | APIM tier and units; defaults to `Developer` / `1` for testing |
+| `apimSkuName` / `apimSkuCapacity` | Defaults to `Developer` / `1` for testing; private production uses classic `Premium` |
 | `orgModels` | Per-org model allowlists; omitted orgs or empty arrays are unrestricted |
 | `perOrgRateLimitCalls` / `perOrgRateLimitRenewalPeriod` | Request limit per org; defaults to 300 calls per 60 seconds |
 | `foundryProjectName` | Include the project's managed-compute deployments in `/models` |
 | `extraModelIds` | Manually add callable deployments missing from discovery |
 | `defaultTemperatureModelIds` | Normalize Chat Completions temperature to `1` for models that require it |
 | `appGwExistingNsgName` | Preserve an existing gateway subnet NSG in this resource group; manage only the application client rule |
-| `enablePrivateNetworking` | Private APIM and Foundry connections behind the public gateway; requires `Developer` or classic `Premium` |
+| `enablePrivateNetworking` | Defaults to true; requires `Developer` or classic `Premium` and Application Gateway |
+| `foundryPrivateEndpointManualApproval` | Request owner approval instead of automatic approval; preserve on reruns |
 
 For all types, defaults, dependencies, and cost notes, see the
 [parameter reference](parameters.md). Keep discovery API versions at their defaults; inference
@@ -180,6 +279,9 @@ uses `/openai/v1`. For AI feature examples, use the [AI Gateway guide](ai-gatewa
 your certificate. Preserve existing custom names, endpoints, and Foundry subscription and resource-group
 settings. Deployments that previously omitted `deployAppGateway` will now add it; set `false` explicitly
 only if you intend to run APIM without WAF.
+Private networking now also defaults to true: an existing explicit false stays public until
+you change it. Other APIM tiers and APIM-only deployments must explicitly set
+`enablePrivateNetworking = false`. Preview network migrations before applying them.
 
 **Check the attached NSG before upgrading an existing gateway.** A fresh deployment creates
 `<appGwName>-nsg`, but a governance-owned NSG must be explicitly selected with

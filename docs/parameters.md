@@ -88,8 +88,8 @@ and failover checks, see [backend resilience](ai-gateway.md#resilient-multi-foun
 ## Application Gateway and HTTPS
 
 Application Gateway WAF_v2 is enabled by default and adds gateway and public-IP charges.
-APIM remains public by default; its secret-header policy alone is not network isolation.
-Use [private networking](#private-networking) for a private APIM gateway and Foundry connections.
+APIM and its Foundry connections are private by default; Application Gateway remains public.
+The gateway-secret policy remains defense in depth, not a substitute for network isolation.
 
 Without a certificate, the gateway is HTTP-only for initial setup. Supply both PFX values before
 connecting Copilot or sending keys. An explicit `appGwEnableHttps = false` overrides inference.
@@ -97,7 +97,8 @@ connecting Copilot or sending keys. An explicit `appGwEnableHttps = false` overr
 | Parameter | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `deployAppGateway` | bool | `true` | Deploy the WAF gateway and enforce its secret header in APIM. Set `false` explicitly for APIM-only operation without WAF. |
-| `enablePrivateNetworking` | bool | `false` | Keep the gateway public; inject APIM into an internal VNet and create private Foundry connections. Requires the gateway, `Developer` or classic `Premium`, standard Foundry hostnames, and an empty `appGwAllowedClientIp`. |
+| `enablePrivateNetworking` | bool | `true` | Keep the gateway public; inject APIM into an internal VNet and create private Foundry connections. Requires the gateway, `Developer` or classic `Premium`, standard Foundry hostnames, and an empty `appGwAllowedClientIp`. |
+| `foundryPrivateEndpointManualApproval` | bool | `false` | Request manual owner approval for primary/pool Foundry endpoints. Preserve this mode on redeployment. Pending connections cannot carry traffic; approval does not grant APIM its Foundry role. |
 | `appGwName` | string | `'${apimName}-appgw'` | Gateway name; preserve an existing override when upgrading. |
 | `appGwExistingNsgName` | string | `''` | Existing gateway subnet NSG in the deployment resource group. Empty creates and owns `<appGwName>-nsg`; nonempty preserves that NSG and updates only `AllowByokClientIngress`. Set before upgrading a governance-managed deployment. |
 | `appGwSharedSecret` | secure string | `''` | Required when the gateway is enabled; at least 32 characters. Generate separately from org keys and retain for redeployments. |
@@ -110,8 +111,8 @@ connecting Copilot or sending keys. An explicit `appGwEnableHttps = false` overr
 
 ## Private networking
 
-Set `enablePrivateNetworking = true` in your parameter file. No extra mandatory parameters
-are needed. The supported topology is:
+`enablePrivateNetworking = true` is the template and starter default. No extra mandatory
+parameters are needed. The supported topology is:
 
 ```text
 Copilot client -> public HTTPS Application Gateway -> private APIM -> Foundry private endpoint
@@ -129,11 +130,17 @@ Copilot client -> public HTTPS Application Gateway -> private APIM -> Foundry pr
   Cognitive Services, and Foundry project discovery. Accounts must be `OpenAI` or `AIServices`;
   backend URLs must use their standard account hostnames.
 - Does **not** disable public access on existing Foundry accounts. Other consumers are not
-  changed. Account owners can disable public access separately after testing private connectivity.
+  changed. Foundry can already have public access **Disabled** before deployment; setup uses
+  ARM and never temporarily opens its data plane. Account owners can also disable public
+  access separately after testing private connectivity.
   Alternate Azure ML endpoints, Content Safety, and Redis are not privatized by this flag.
 - The deployer needs permission to create the network and DNS resources and approve private
   endpoint connections on each account, including accounts in other subscriptions. A pending
   connection must be approved by its account owner before requests work.
+  Set `foundryPrivateEndpointManualApproval = true` when the deployer cannot automatically
+  approve the connection. Keep that setting on reruns. This is separate from permission to
+  assign APIM's managed identity its Foundry data-plane role. Register `Microsoft.Network`
+  in both subscriptions and `Microsoft.CognitiveServices` in Foundry's subscription.
 - The gateway VNet retains its name and `10.50.0.0/16` address space. A shared network module owns
   its inline subnets: gateway `10.50.0.0/24`, APIM `10.50.1.0/24`, and private endpoints
   `10.50.2.0/24`. The latter two and the APIM NSG are reserved in public mode too, so reverting
@@ -146,6 +153,9 @@ Copilot client -> public HTTPS Application Gateway -> private APIM -> Foundry pr
 Before upgrading an existing deployment, preserve `appGwName` and `appGwExistingNsgName`,
 check address-space/subnet compatibility, clear any `appGwAllowedClientIp`, and review what-if.
 APIM network changes can take 15 minutes or longer; Developer deployments can experience downtime.
+Existing explicit false values remain public. Existing public-only APIM SKUs must either
+explicitly retain public mode or migrate to a supported tier. APIM-only deployments must set
+both `deployAppGateway = false` and `enablePrivateNetworking = false`.
 
 Setting the flag back to `false` returns APIM to public mode. Incremental deployments do not
 delete previously created private endpoints or DNS resources: remove those separately after
@@ -157,6 +167,9 @@ private endpoint is **Approved**, inspect the gateway backend health for the API
 and test `/byok/<org>/models` plus a completion through the public HTTPS gateway. The
 `apimGatewayUrl` and `orgProxyBasePaths` outputs are APIM addresses, not public client URLs
 in private mode; clients continue using the gateway's HTTPS hostname.
+`foundryPrivateEndpoints` returns endpoint/account resource IDs for approval checks, not
+credentials. The [guided helper](getting-started.md#guided-deployment-recommended) prepares
+networking, gates the APIM deployment on approval, and resumes with the same local settings.
 
 The gateway NSG allows public TCP 80, plus 443 when HTTPS is enabled. Port 80 becomes a
 redirect once HTTPS is enabled; never send credentials over HTTP. New NSGs also allow

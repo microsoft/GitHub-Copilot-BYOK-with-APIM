@@ -4,7 +4,7 @@ Use your Microsoft Foundry models in GitHub Copilot with bring your own key (BYO
 implementation uses Application Gateway and Azure API Management (APIM) to manage access,
 routing, and limits for multiple GitHub organizations on one shared gateway.
 
-![Architecture: GitHub Copilot connects through Application Gateway and APIM to Microsoft Foundry](assets/ghcp_byok_architecture.png)
+![Architecture: GitHub Copilot connects through Application Gateway and APIM to Microsoft Foundry](assets/ghcp-byok-apim-architecture.png)
 
 ## Contents
 
@@ -31,9 +31,10 @@ without that organization's key does not grant access.
 
 Two defaults matter:
 
-- **APIM remains public by default.** Its gateway-secret policy is not network isolation.
-  Optional [private networking](docs/parameters.md#private-networking) keeps the gateway public
-  while making APIM and its Foundry connections private.
+- **Backends are private by default.** Application Gateway stays public for Copilot;
+  APIM runs inside the VNet and reaches your existing Foundry through private endpoints.
+  Foundry can already have public access disabled; its access settings are never changed.
+  See [private networking](docs/parameters.md#private-networking).
 - **WAF starts in Detection mode.** It records rule matches but does not block requests. Review
   coding traffic and tune false positives before enabling Prevention mode.
 
@@ -68,9 +69,13 @@ completions still use GitHub-hosted models.
 
 1. **Prepare a model.** Use an existing Foundry account with a deployment that meets the
    [model requirements](#model-requirements) below.
-2. **Deploy the gateway.** Follow [Getting started](docs/getting-started.md) for prerequisites,
-   seven starter settings and verification. Application Gateway is now enabled by default and
-   incurs Azure charges; APIM-only deployments must explicitly set `deployAppGateway = false`.
+2. **Deploy the gateway.** Follow the [guided PowerShell setup](docs/getting-started.md#guided-deployment-recommended):
+   supply your existing Foundry resource ID and confirm the gateway settings. The helper
+   handles private networking and pauses for owner approval when needed.
+   Application Gateway, APIM, private endpoints, and DNS incur Azure charges.
+   Developer APIM is for testing; use classic Premium for private production deployments.
+   Manual APIM-only deployments must explicitly set both `deployAppGateway = false`
+   and `enablePrivateNetworking = false`.
    [Configure DNS and a TLS certificate](docs/getting-started.md#production-enable-https-on-the-app-gateway)
    before connecting Copilot; supplying the PFX enables HTTPS automatically.
 3. **Connect Copilot.** Follow [client configuration](docs/client-surfaces.md), or the
@@ -90,7 +95,7 @@ Copilot CLI errors.
 
 ## Configure enterprise BYOK
 
-An enterprise owner must first enable **AI controls > Copilot > Features > Enable custom models**.
+A GitHub enterprise owner must first enable **AI controls > Copilot > Features > Enable custom models**.
 
 ![Enable custom models](assets/ghportal_custom_models_enable.png)
 
@@ -154,6 +159,8 @@ For offline infrastructure checks, run `pwsh -File tests/deployment-contract.ps1
 ([test script](tests/deployment-contract.ps1)); requires Bicep CLI and does not deploy resources.
 For offline start/stop helper checks, run `pwsh -File tests/app-gateway-helper.ps1`
 ([helper tests](tests/app-gateway-helper.ps1)); requires PowerShell 7.2+ and mocks Azure CLI.
+For guided deployment checks, run `pwsh -File tests/deployment-helper.ps1`
+([deployment helper tests](tests/deployment-helper.ps1)); Azure and HTTP operations are mocked.
 For executable request-compatibility checks, run `pwsh -File tests/chat-request-compatibility.ps1`
 ([policy tests](tests/chat-request-compatibility.ps1)); requires PowerShell 7.2+ and executes
 the production policy expression without Azure access or additional packages.

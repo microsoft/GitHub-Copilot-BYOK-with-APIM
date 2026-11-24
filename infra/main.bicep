@@ -209,8 +209,11 @@ param orgSemanticCacheEnabled object = {}
 @description('Deploy Application Gateway (WAF_v2) and require requests to traverse it. Enabled by default and incurs Azure charges. Set false explicitly for APIM-only deployments without WAF.')
 param deployAppGateway bool = true
 
-@description('Keep Application Gateway public, put APIM in an internal VNet, and add private endpoints/DNS for primary and pool Foundry accounts. Requires deployAppGateway and the Developer or classic Premium APIM tier. Does not change existing Foundry public-access settings.')
-param enablePrivateNetworking bool = false
+@description('Keep Application Gateway public, put APIM in an internal VNet, and add private endpoints/DNS for primary and pool Foundry accounts. Enabled by default; requires deployAppGateway and the Developer or classic Premium APIM tier. Does not change existing Foundry public-access settings.')
+param enablePrivateNetworking bool = true
+
+@description('Request manual owner approval for Foundry private endpoints instead of automatic approval. Preserve this setting on redeployment. Pending connections must be approved before inference works; this does not grant APIM data-plane access.')
+param foundryPrivateEndpointManualApproval bool = false
 
 @description('Application Gateway name. Defaults to <apimName>-appgw.')
 param appGwName string = '${apimName}-appgw'
@@ -857,6 +860,7 @@ module foundryPrivateNetwork 'modules/foundry-private-network.bicep' = if (priva
     vnetId: appGatewayNetwork!.outputs.vnetId
     subnetId: appGatewayNetwork!.outputs.privateEndpointSubnetId
     foundryAccounts: privateFoundryAccounts
+    manualApproval: foundryPrivateEndpointManualApproval
     tags: tags
   }
 }
@@ -893,6 +897,7 @@ output appGatewayPublicIp string = deployAppGateway ? appGateway!.outputs.public
 output appGatewayFrontendUrl string = deployAppGateway ? appGateway!.outputs.frontendUrl : ''
 output appGatewayNetworkSecurityGroupId string = deployAppGateway ? appGatewayNetwork!.outputs.networkSecurityGroupId : ''
 output applicationInsightsName string = deployObservability ? observability!.outputs.appInsightsName : ''
+output foundryPrivateEndpoints array = privateNetworkingEnabled ? foundryPrivateNetwork!.outputs.endpoints : []
 output deploymentSummary object = {
   applicationGatewayEnabled: deployAppGateway
   privateNetworkingEnabled: privateNetworkingEnabled

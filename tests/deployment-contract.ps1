@@ -40,10 +40,10 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw 'Commented starter override examples failed to compile.'
     }
-    [IO.File]::WriteAllText($privateSourcePath, $starterSource.Replace('param enablePrivateNetworking = false', 'param enablePrivateNetworking = true'))
+    [IO.File]::WriteAllText($privateSourcePath, $starterSource.Replace('param enablePrivateNetworking = true', 'param enablePrivateNetworking = false').Replace('param deployAppGateway = true', 'param deployAppGateway = false'))
     & bicep build-params $privateSourcePath --outfile $privateParametersPath
     if ($LASTEXITCODE -ne 0) {
-        throw 'Private networking parameter example failed to compile.'
+        throw 'Explicit public/APIM-only parameter example failed to compile.'
     }
 
     $template = Get-Content -Raw -LiteralPath $templatePath | ConvertFrom-Json
@@ -58,9 +58,13 @@ try {
     Assert-Equal $parameters.deployAppGateway.defaultValue $true 'Application Gateway must be the template default.'
     Assert-Equal $starter.parameters.deployAppGateway.value $true 'The starter must explicitly include Application Gateway.'
     Assert-Equal @($starter.parameters.PSObject.Properties).Count 9 'The starter must contain only seven inputs and the two topology flags.'
-    Assert-Equal $parameters.enablePrivateNetworking.defaultValue $false 'Private networking must remain opt-in.'
-    Assert-Equal $starter.parameters.enablePrivateNetworking.value $false 'The starter must preserve public mode by default.'
-    Assert-Equal $privateParameters.parameters.enablePrivateNetworking.value $true 'The private-mode example must enable the feature.'
+    Assert-Equal $parameters.enablePrivateNetworking.defaultValue $true 'Private networking must be the default.'
+    Assert-Equal $starter.parameters.enablePrivateNetworking.value $true 'The starter must use private backend networking.'
+    Assert-Equal $privateParameters.parameters.enablePrivateNetworking.value $false 'Public mode must remain an explicit opt-out.'
+    Assert-Equal $privateParameters.parameters.deployAppGateway.value $false 'APIM-only mode must disable both topology flags.'
+    Assert-Equal $overrides.parameters.apimSkuName.value 'Premium' 'The production example must support private networking.'
+    Assert-Equal $parameters.foundryPrivateEndpointManualApproval.defaultValue $false 'Automatic approval remains the default.'
+    Assert-Equal $overrides.parameters.foundryPrivateEndpointManualApproval.value $true 'The owner-approval example must compile.'
     Assert-Equal $starter.parameters.foundryAccountSubscriptionId.value '<foundry-subscription-id>' 'The starter must explicitly include the Foundry subscription ID.'
     Assert-Equal $parameters.foundryAccountSubscriptionId.defaultValue '[subscription().subscriptionId]' 'The template must retain its same-subscription default for compatibility.'
     Assert-Equal $parameters.appGwName.defaultValue "[format('{0}-appgw', parameters('apimName'))]" 'Gateway naming must derive from APIM.'
@@ -225,13 +229,19 @@ try {
     $foundryNetwork = @($template.resources | Where-Object { $_.type -eq 'Microsoft.Resources/deployments' -and $_.name -eq 'foundryPrivateNetwork' })[0]
     Assert-Equal $foundryNetwork.condition "[variables('privateNetworkingEnabled')]" 'Public mode must not create private endpoints or DNS zones.'
     Assert-Equal $foundryNetwork.properties.parameters.foundryAccounts.value "[variables('privateFoundryAccounts')]" 'Private connectivity must cover the primary and pool accounts.'
+    Assert-Equal $foundryNetwork.properties.parameters.manualApproval.value "[parameters('foundryPrivateEndpointManualApproval')]" 'Preserve the selected approval mode in the module.'
     Assert-Equal $template.variables.privateFoundryAccounts.Contains("union(createArray(variables('primaryFoundryAccount')), map(variables('foundryPoolMembersSpec')") $true 'Include and deduplicate primary and pool accounts, including discovery-only accounts.'
     $foundryTemplate = $foundryNetwork.properties.template
     Assert-Equal ($foundryTemplate.variables.privateDnsZoneNames -join ',') 'privatelink.openai.azure.com,privatelink.cognitiveservices.azure.com,privatelink.services.ai.azure.com' 'DNS must cover inference and Foundry project discovery.'
     $privateEndpoints = @($foundryTemplate.resources | Where-Object { $_.type -eq 'Microsoft.Network/privateEndpoints' })[0]
     Assert-Equal $privateEndpoints.copy.count "[length(parameters('foundryAccounts'))]" 'Every configured account must get a private endpoint.'
     Assert-Equal $privateEndpoints.properties.subnet.id "[parameters('subnetId')]" 'All account endpoints must use the dedicated endpoint subnet.'
-    Assert-Equal ($privateEndpoints.properties.privateLinkServiceConnections[0].properties.groupIds -join ',') 'account' 'Use the Cognitive Services account Private Link subresource.'
+    $connectionSpec = @($foundryTemplate.variables.copy | Where-Object name -eq 'connections')[0].input
+    Assert-Equal ($connectionSpec.properties.groupIds -join ',') 'account' 'Use the Cognitive Services account Private Link subresource.'
+    Assert-Equal $privateEndpoints.properties.privateLinkServiceConnections.Contains("if(parameters('manualApproval'), createArray(), createArray(") $true 'Manual mode must not send an automatic connection.'
+    Assert-Equal $privateEndpoints.properties.manualPrivateLinkServiceConnections.Contains("if(parameters('manualApproval'), createArray(") $true 'Manual mode must send an owner-approval request.'
+    Assert-Equal $foundryTemplate.outputs.endpoints.type 'array' 'Return endpoint IDs and account mappings for approval checks.'
+    Assert-Equal $template.outputs.foundryPrivateEndpoints.type 'array' 'Expose non-secret endpoint mappings from the root template.'
     $dnsLinks = @($foundryTemplate.resources | Where-Object { $_.type -eq 'Microsoft.Network/privateDnsZones/virtualNetworkLinks' })[0]
     Assert-Equal $dnsLinks.properties.virtualNetwork.id "[parameters('vnetId')]" 'APIM must resolve Foundry through its connected VNet.'
     Assert-Equal $dnsLinks.properties.registrationEnabled $false 'Private endpoint DNS must not register unrelated virtual machines.'
