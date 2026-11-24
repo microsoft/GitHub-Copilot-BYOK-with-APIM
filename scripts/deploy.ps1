@@ -29,6 +29,7 @@ param(
     [string]$PfxPath,
     [securestring]$PfxPassword,
     [string]$Model,
+    [switch]$VerifyOnly,
     [switch]$Preview,
     [switch]$NonInteractive,
     [switch]$AllowPublicMigration
@@ -209,7 +210,7 @@ function Deploy-Template {
 
 function Invoke-GatewayRequest {
     param([string]$Uri, [string]$Key, $Body)
-    $arguments = @{ Uri = $Uri; Headers = @{ 'api-key' = $Key }; TimeoutSec = 120; MaximumRedirection = 0 }
+    $arguments = @{ Uri = $Uri; Headers = @{ Authorization = "Bearer $Key" }; TimeoutSec = 120; MaximumRedirection = 0 }
     if ($null -ne $Body) {
         $arguments.Method = 'Post'
         $arguments.ContentType = 'application/json'
@@ -232,12 +233,22 @@ function Invoke-GatewayRequest {
 }
 
 try {
-    foreach ($tool in @('az', 'bicep')) {
+    if ($VerifyOnly) {
+        foreach ($name in @('FoundryResourceId', 'ParameterFile', 'Location', 'ApimName', 'PublisherEmail',
+                'Organizations', 'ApimSkuName', 'ManualApproval', 'GenerateKeys', 'PfxPath', 'PfxPassword',
+                'AllowPublicMigration', 'Preview', 'WhatIf')) {
+            if ($PSBoundParameters.ContainsKey($name)) { throw "VerifyOnly cannot be combined with -$name. It uses saved deployment settings." }
+        }
+    }
+    $tools = if ($VerifyOnly) { @('az') } else { @('az', 'bicep') }
+    foreach ($tool in $tools) {
         if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "$tool is required. Install it before running this helper." }
     }
-    $version = & bicep --version
-    if ($LASTEXITCODE -ne 0 -or $version -notmatch 'version (\d+\.\d+\.\d+)' -or [version]$Matches[1] -lt [version]'0.38.0') {
-        throw 'Bicep CLI 0.38 or later is required.'
+    if (-not $VerifyOnly) {
+        $version = & bicep --version
+        if ($LASTEXITCODE -ne 0 -or $version -notmatch 'version (\d+\.\d+\.\d+)' -or [version]$Matches[1] -lt [version]'0.38.0') {
+            throw 'Bicep CLI 0.38 or later is required.'
+        }
     }
     $SubscriptionId = Read-Setting $SubscriptionId 'SubscriptionId'
     $ResourceGroup = Read-Setting $ResourceGroup 'ResourceGroup'
@@ -248,6 +259,7 @@ try {
     $stateDirectory = Join-Path $root ".azure\deploy\$SubscriptionId\$ResourceGroup"
     $statePath = Join-Path $stateDirectory 'state.json'
     $state = if (Test-Path -LiteralPath $statePath) { Get-Content -Raw -LiteralPath $statePath | ConvertFrom-Json -AsHashtable } else { @{} }
+    if ($VerifyOnly -and -not $state['parameters']) { throw 'VerifyOnly requires saved deployment state for this subscription/resource group. It will not provision missing resources.' }
     $p = if ($state['parameters']) { $state['parameters'] | ConvertTo-Json -Depth 100 | ConvertFrom-Json -AsHashtable } else { @{} }
     if ($ParameterFile) {
         $path = (Resolve-Path -LiteralPath $ParameterFile).Path
@@ -384,73 +396,92 @@ try {
     if ($Hostname -and ([Uri]::CheckHostName($Hostname) -ne [UriHostNameType]::Dns -or $Hostname.Contains(':'))) { throw 'Hostname must be a DNS hostname without scheme, path or port.' }
     $Model = if ($Model) { $Model } else { $state['model'] }
     Write-Host "Target: $SubscriptionId / $ResourceGroup / $Location. APIM: $($p.apimName), $($p.apimSkuName)."
-    Write-Warning 'Charges apply for APIM, WAF_v2 Application Gateway, private endpoints and private DNS. Developer is for testing; classic Premium has production-tier charges.'
-    Write-Host 'Required independently: permission to assign APIM a Foundry data-plane role, and private endpoint owner approval. Azure Policy can still block deployment.'
-    if ($Preview -or -not $PSCmdlet.ShouldProcess("$SubscriptionId/$ResourceGroup", 'Prepare private networking and deploy gateway')) {
-        return [pscustomobject]@{ Status = 'PreflightOnly'; ReadyForCopilot = $false; MissingProviderRegistrations = $registrations.ToArray() }
-    }
-    if (-not $NonInteractive -and -not (Read-Confirmation 'Type DEPLOY to confirm this target and its charges' 'DEPLOY')) { throw 'Deployment cancelled.' }
-    if (-not $p['orgKeys']) { $p.orgKeys = @{} }
-    if (-not $Organizations -and $p.orgKeys.Count -eq 0) { $Organizations = (Read-Setting '' 'Organizations (comma-separated slugs)') -split ',' }
-    foreach ($org in @($Organizations)) {
-        if ($null -eq $org) { continue }
-        if ($org -notmatch '^[a-z0-9]+(?:-[a-z0-9]+)*$') { throw "Invalid organization slug: $org." }
-        if (-not $p.orgKeys.ContainsKey($org)) { $p.orgKeys[$org] = '' }
-    }
-    $needsKeys = -not $p['appGwSharedSecret'] -or @($p.orgKeys.Values | Where-Object { -not $_ }).Count -gt 0
-    if ($needsKeys -and -not $GenerateKeys -and -not $NonInteractive) { $GenerateKeys = (Read-Host 'Generate and save missing keys only? [y/N]') -eq 'y' }
-    foreach ($org in @($p.orgKeys.Keys)) {
-        if ($org -notmatch '^[a-z0-9]+(?:-[a-z0-9]+)*$') { throw "Invalid organization slug: $org." }
-        if (-not $p.orgKeys[$org]) {
-            if (-not $GenerateKeys) { throw 'Missing organization keys. Supply orgKeys in a private parameter file or explicitly use -GenerateKeys.' }
-            $p.orgKeys[$org] = [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLowerInvariant()
+    if ($VerifyOnly) {
+        Write-Host 'Verifying existing infrastructure only. No deployments, provider registrations, key generation or state writes.'
+        $networkOutputs = @{ vnetId = @{ value = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroup/providers/Microsoft.Network/virtualNetworks/$($p.appGwName)-vnet" } }
+        $endpoints = @(for ($i = 0; $i -lt $accounts.Count; $i++) {
+            $account = $accounts[$i]
+            @{
+                id = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroup/providers/Microsoft.Network/privateEndpoints/$($p.appGwName)-foundry-pe-$i"
+                accountId = "/subscriptions/$($account.subscriptionId)/resourceGroups/$($account.resourceGroup)/providers/Microsoft.CognitiveServices/accounts/$($account.accountName)"
+            }
+        })
+        $gateway = Invoke-Az 'reading existing Application Gateway' @('network', 'application-gateway', 'show', '--subscription', $SubscriptionId, '--resource-group', $ResourceGroup, '--name', $p.appGwName)
+        $https = @($gateway.httpListeners | Where-Object { $_.protocol -eq 'Https' }).Count -gt 0
+        $publicIpIds = @($gateway.frontendIPConfigurations | Where-Object { $_['publicIPAddress'] } | ForEach-Object { $_.publicIPAddress.id })
+        if ($publicIpIds.Count -ne 1) { throw 'Expected one public Application Gateway frontend for verification.' }
+        $publicIp = Invoke-Az 'reading existing gateway public IP' @('network', 'public-ip', 'show', '--ids', $publicIpIds[0])
+        $gatewayPublicIp = $publicIp.ipAddress
+    } else {
+        Write-Warning 'Charges apply for APIM, WAF_v2 Application Gateway, private endpoints and private DNS. Developer is for testing; classic Premium has production-tier charges.'
+        Write-Host 'Required independently: permission to assign APIM a Foundry data-plane role, and private endpoint owner approval. Azure Policy can still block deployment.'
+        if ($Preview -or -not $PSCmdlet.ShouldProcess("$SubscriptionId/$ResourceGroup", 'Prepare private networking and deploy gateway')) {
+            return [pscustomobject]@{ Status = 'PreflightOnly'; ReadyForCopilot = $false; MissingProviderRegistrations = $registrations.ToArray() }
         }
-    }
-    if (-not $p['appGwSharedSecret']) {
-        if (-not $GenerateKeys) { throw 'Missing gateway secret. Supply it in a private parameter file or explicitly use -GenerateKeys.' }
-        $p.appGwSharedSecret = [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLowerInvariant()
-    }
-    if ($p.appGwSharedSecret.Length -lt 32 -or $p.orgKeys.Count -eq 0) { throw 'At least one org key and a gateway secret of at least 32 characters are required.' }
-    if ($PfxPath) {
-        if (-not $PfxPassword) {
-            if ($NonInteractive) { throw 'Supply PfxPassword with PfxPath.' }
-            $PfxPassword = Read-Host 'PFX password' -AsSecureString
+        if (-not $NonInteractive -and -not (Read-Confirmation 'Type DEPLOY to confirm this target and its charges' 'DEPLOY')) { throw 'Deployment cancelled.' }
+        if (-not $p['orgKeys']) { $p.orgKeys = @{} }
+        if (-not $Organizations -and $p.orgKeys.Count -eq 0) { $Organizations = (Read-Setting '' 'Organizations (comma-separated slugs)') -split ',' }
+        foreach ($org in @($Organizations)) {
+            if ($null -eq $org) { continue }
+            if ($org -notmatch '^[a-z0-9]+(?:-[a-z0-9]+)*$') { throw "Invalid organization slug: $org." }
+            if (-not $p.orgKeys.ContainsKey($org)) { $p.orgKeys[$org] = '' }
         }
-        $p.appGwHttpsPfxBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $PfxPath).Path))
-        $p.appGwHttpsPfxPassword = [System.Net.NetworkCredential]::new('', $PfxPassword).Password
-        $p.appGwEnableHttps = $true
-    }
-    foreach ($key in @('orgKeys', 'appGwSharedSecret', 'appGwHttpsPfxBase64', 'appGwHttpsPfxPassword')) { Add-SecretValues $p[$key] }
-    $https = if ($p.ContainsKey('appGwEnableHttps')) { $p.appGwEnableHttps } else { -not [string]::IsNullOrEmpty($p['appGwHttpsPfxBase64']) }
-    if ($https -and (-not $p['appGwHttpsPfxBase64'] -or -not $p['appGwHttpsPfxPassword'])) { throw 'HTTPS requires both PFX data and password.' }
-    Write-PrivateJson $statePath @{ location = $Location; hostname = $Hostname; model = $Model; parameters = $p }
-    Write-Host "Resumable parameters/keys saved privately in $statePath. Keep this file private; rerun with the same target to resume."
-    foreach ($registration in $registrations) {
-        if ($registration.subscription -ne $SubscriptionId) {
-            if ($NonInteractive -or (Read-Host "Register $($registration.namespace) in Foundry subscription $($registration.subscription)? [y/N]") -ne 'y') {
-                throw "Ask the subscription owner to register $($registration.namespace) in $($registration.subscription), then resume."
+        $needsKeys = -not $p['appGwSharedSecret'] -or @($p.orgKeys.Values | Where-Object { -not $_ }).Count -gt 0
+        if ($needsKeys -and -not $GenerateKeys -and -not $NonInteractive) { $GenerateKeys = (Read-Host 'Generate and save missing keys only? [y/N]') -eq 'y' }
+        foreach ($org in @($p.orgKeys.Keys)) {
+            if ($org -notmatch '^[a-z0-9]+(?:-[a-z0-9]+)*$') { throw "Invalid organization slug: $org." }
+            if (-not $p.orgKeys[$org]) {
+                if (-not $GenerateKeys) { throw 'Missing organization keys. Supply orgKeys in a private parameter file or explicitly use -GenerateKeys.' }
+                $p.orgKeys[$org] = [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLowerInvariant()
             }
         }
-        $null = Invoke-Az 'registering provider' @('provider', 'register', '--subscription', $registration.subscription, '--namespace', $registration.namespace, '--wait')
+        if (-not $p['appGwSharedSecret']) {
+            if (-not $GenerateKeys) { throw 'Missing gateway secret. Supply it in a private parameter file or explicitly use -GenerateKeys.' }
+            $p.appGwSharedSecret = [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLowerInvariant()
+        }
+        if ($p.appGwSharedSecret.Length -lt 32 -or $p.orgKeys.Count -eq 0) { throw 'At least one org key and a gateway secret of at least 32 characters are required.' }
+        if ($PfxPath) {
+            if (-not $PfxPassword) {
+                if ($NonInteractive) { throw 'Supply PfxPassword with PfxPath.' }
+                $PfxPassword = Read-Host 'PFX password' -AsSecureString
+            }
+            $p.appGwHttpsPfxBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $PfxPath).Path))
+            $p.appGwHttpsPfxPassword = [System.Net.NetworkCredential]::new('', $PfxPassword).Password
+            $p.appGwEnableHttps = $true
+        }
+        foreach ($key in @('orgKeys', 'appGwSharedSecret', 'appGwHttpsPfxBase64', 'appGwHttpsPfxPassword')) { Add-SecretValues $p[$key] }
+        $https = if ($p.ContainsKey('appGwEnableHttps')) { $p.appGwEnableHttps } else { -not [string]::IsNullOrEmpty($p['appGwHttpsPfxBase64']) }
+        if ($https -and (-not $p['appGwHttpsPfxBase64'] -or -not $p['appGwHttpsPfxPassword'])) { throw 'HTTPS requires both PFX data and password.' }
+        Write-PrivateJson $statePath @{ location = $Location; hostname = $Hostname; model = $Model; parameters = $p }
+        Write-Host "Resumable parameters/keys saved privately in $statePath. Keep this file private; rerun with the same target to resume."
+        foreach ($registration in $registrations) {
+            if ($registration.subscription -ne $SubscriptionId) {
+                if ($NonInteractive -or (Read-Host "Register $($registration.namespace) in Foundry subscription $($registration.subscription)? [y/N]") -ne 'y') {
+                    throw "Ask the subscription owner to register $($registration.namespace) in $($registration.subscription), then resume."
+                }
+            }
+            $null = Invoke-Az 'registering provider' @('provider', 'register', '--subscription', $registration.subscription, '--namespace', $registration.namespace, '--wait')
+        }
+        if (-not $groupExists) { $null = Invoke-Az 'creating target resource group' @('group', 'create', '--subscription', $SubscriptionId, '--name', $ResourceGroup, '--location', $Location) }
+        $networkParameters = @{ location = $Location; appGwName = $p.appGwName; enableHttps = $https }
+        if ($p['appGwExistingNsgName']) { $networkParameters.existingNsgName = $p.appGwExistingNsgName }
+        if ($p['tags']) { $networkParameters.tags = $p.tags }
+        $network = Deploy-Template 'appGatewayNetwork' 'infra\modules\gateway-network.bicep' $networkParameters
+        $networkOutputs = $network.properties.outputs
+        $privateParameters = @{
+            location = $Location; namePrefix = $p.appGwName; vnetId = $networkOutputs.vnetId.value
+            subnetId = $networkOutputs.privateEndpointSubnetId.value; foundryAccounts = $accounts.ToArray()
+            manualApproval = $p.foundryPrivateEndpointManualApproval
+        }
+        if ($p['tags']) { $privateParameters.tags = $p.tags }
+        $privateNetwork = Deploy-Template 'foundryPrivateNetwork' 'infra\modules\foundry-private-network.bicep' $privateParameters
+        $endpoints = @($privateNetwork.properties.outputs.endpoints.value)
+        if ($endpoints.Count -ne $accounts.Count) { throw 'Private network deployment did not return every expected endpoint.' }
+        if (-not (Assert-Approved $endpoints)) { return [pscustomobject]@{ Status = 'AwaitingApproval'; ReadyForCopilot = $false; StatePath = $statePath } }
+        $deployment = Deploy-Template 'main' 'infra\main.bicep' $p
+        if ($deployment.properties.provisioningState -ne 'Succeeded') { throw 'Main deployment did not succeed.' }
+        $gatewayPublicIp = $deployment.properties.outputs.appGatewayPublicIp.value
     }
-    if (-not $groupExists) { $null = Invoke-Az 'creating target resource group' @('group', 'create', '--subscription', $SubscriptionId, '--name', $ResourceGroup, '--location', $Location) }
-    $networkParameters = @{ location = $Location; appGwName = $p.appGwName; enableHttps = $https }
-    if ($p['appGwExistingNsgName']) { $networkParameters.existingNsgName = $p.appGwExistingNsgName }
-    if ($p['tags']) { $networkParameters.tags = $p.tags }
-    $network = Deploy-Template 'appGatewayNetwork' 'infra\modules\gateway-network.bicep' $networkParameters
-    $networkOutputs = $network.properties.outputs
-    $privateParameters = @{
-        location = $Location; namePrefix = $p.appGwName; vnetId = $networkOutputs.vnetId.value
-        subnetId = $networkOutputs.privateEndpointSubnetId.value; foundryAccounts = $accounts.ToArray()
-        manualApproval = $p.foundryPrivateEndpointManualApproval
-    }
-    if ($p['tags']) { $privateParameters.tags = $p.tags }
-    $privateNetwork = Deploy-Template 'foundryPrivateNetwork' 'infra\modules\foundry-private-network.bicep' $privateParameters
-    $endpoints = @($privateNetwork.properties.outputs.endpoints.value)
-    if ($endpoints.Count -ne $accounts.Count) { throw 'Private network deployment did not return every expected endpoint.' }
-    if (-not (Assert-Approved $endpoints)) { return [pscustomobject]@{ Status = 'AwaitingApproval'; ReadyForCopilot = $false; StatePath = $statePath } }
-    $deployment = Deploy-Template 'main' 'infra\main.bicep' $p
-    if ($deployment.properties.provisioningState -ne 'Succeeded') { throw 'Main deployment did not succeed.' }
     if (-not (Assert-Approved $endpoints)) { return [pscustomobject]@{ Status = 'AwaitingApproval'; ReadyForCopilot = $false; StatePath = $statePath } }
     $apim = Invoke-Az 'verifying internal APIM' @('apim', 'show', '--subscription', $SubscriptionId, '--resource-group', $ResourceGroup, '--name', $p.apimName)
     $privateAddresses = @($apim['privateIpAddresses'] | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
@@ -474,7 +505,7 @@ try {
     }
     if (-not $healthy) { throw 'Application Gateway backend is unhealthy. Check APIM private VIP, NSG, Host/SNI and provisioning state.' }
     if (-not $https -or -not $Hostname) {
-        Write-Warning "Infrastructure deployed, not ready for Copilot. Point a trusted hostname to $($deployment.properties.outputs.appGatewayPublicIp.value), obtain a full-chain PFX and rerun with -Hostname, -PfxPath and -PfxPassword. Never send keys over HTTP."
+        Write-Warning "Infrastructure deployed, not ready for Copilot. Point a trusted hostname to $gatewayPublicIp, obtain a full-chain PFX and rerun with -Hostname, -PfxPath and -PfxPassword. Never send keys over HTTP."
         return [pscustomobject]@{ Status = 'AwaitingHttps'; ReadyForCopilot = $false; StatePath = $statePath }
     }
     $orgs = @(if ($p['orgs']) { $p.orgs } else { $p.orgKeys.Keys })
@@ -494,7 +525,7 @@ try {
         }
         if (-not $reply.choices -or [string]::IsNullOrWhiteSpace($reply.choices[0].message.content)) { throw "Completion verification returned no assistant text for $org." }
     }
-    Write-PrivateJson $statePath @{ location = $Location; hostname = $Hostname; model = $Model; parameters = $p }
+    if (-not $VerifyOnly) { Write-PrivateJson $statePath @{ location = $Location; hostname = $Hostname; model = $Model; parameters = $p } }
     Write-Host "Ready for Copilot. Base URL: https://$Hostname/byok/<org>. Retrieve the matching org key from the private state file; keys are not printed."
     [pscustomobject]@{ Status = 'Verified'; ReadyForCopilot = $true; StatePath = $statePath }
 }

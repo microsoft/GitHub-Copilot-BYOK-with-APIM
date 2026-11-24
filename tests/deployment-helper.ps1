@@ -60,6 +60,7 @@ function Reset-Mock {
         ProgressCompletions = [System.Collections.Generic.List[string]]::new()
         DelayCommand = ''
         Apim = @{ virtualNetworkType = 'Internal'; privateIpAddresses = @('10.50.1.4') }
+        BicepCalls = 0
     }
     Save-Input
 }
@@ -71,6 +72,7 @@ function Save-Input {
 }
 
 function bicep {
+    $mock.BicepCalls++
     $global:LASTEXITCODE = 0
     if ($args[0] -eq '--version') { return 'Bicep CLI version 0.38.33 (test)' }
     if ($args[0] -eq 'build-params') {
@@ -153,6 +155,12 @@ function az {
             @{ backendAddressPools = @(@{ backendHttpSettingsCollection = @(@{ servers = @(@{ health = $mock.Health }) }) }) }
             break
         }
+        '^network application-gateway show ' {
+            @{ frontendIPConfigurations = @(@{ publicIPAddress = @{ id = '/subscriptions/gateway-sub/resourceGroups/gateway-rg/providers/Microsoft.Network/publicIPAddresses/gateway-pip' } })
+               httpListeners = @(@{ protocol = if ($mock.MainParameters['appGwHttpsPfxBase64']) { 'Https' } else { 'Http' } }) }
+            break
+        }
+        '^network public-ip show ' { @{ ipAddress = '192.0.2.1' }; break }
         default { throw "Unexpected Azure CLI command: $command" }
     }
     ConvertTo-Json -InputObject $result -Depth 50 -Compress
@@ -160,6 +168,9 @@ function az {
 
 function Invoke-RestMethod {
     param($Uri, $Headers, $TimeoutSec, $MaximumRedirection, $Method, $ContentType, $Body)
+    if ($Headers['Authorization'] -cne "Bearer $($values.orgKeys.team)" -or $Headers.ContainsKey('api-key')) {
+        throw 'Verification must use Authorization: Bearer, matching the gateway policy.'
+    }
     $mock.Requests.Add(@{ Uri = $Uri; Headers = $Headers; Body = $Body; MaximumRedirection = $MaximumRedirection })
     if ($Uri.EndsWith('/models')) {
         return [pscustomobject]@{ data = if ($mock.EmptyModels) { @() } else { @([pscustomobject]@{ id = 'test-model' }) } }
@@ -226,6 +237,38 @@ try {
         $rules = (Get-Acl -LiteralPath $stateFile).GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])
         Assert-Equal @($rules | Where-Object { $_.IdentityReference -ne $currentUser }).Count 0 'Saved secrets must grant no other user access.'
     }
+
+    $verifyTarget = @{ SubscriptionId = 'gateway-sub'; ResourceGroup = 'gateway-rg'; VerifyOnly = $true; NonInteractive = $true }
+    $savedState = Get-Content -Raw -LiteralPath $stateFile
+    $savedTimestamp = (Get-Item -LiteralPath $stateFile).LastWriteTimeUtc
+    $mock.Calls.Clear()
+    $mock.Deployments.Clear()
+    $mock.BicepCalls = 0
+    $result = & $helper @verifyTarget
+    Assert-Equal $result.Status 'AwaitingHttps' 'Verify existing HTTP infrastructure without redeployment.'
+    Assert-Equal $result.ReadyForCopilot $false 'Infrastructure checks alone must not claim Copilot readiness.'
+    Assert-Equal $mock.Deployments.Count 0 'VerifyOnly must not deploy.'
+    Assert-Equal $mock.BicepCalls 0 'VerifyOnly must not require Bicep execution.'
+    Assert-Equal @($mock.Calls | Where-Object { ($_ -join ' ') -match 'deployment |group create|provider register|account set|listKeys' }).Count 0 'VerifyOnly must not submit, validate, or preview deployments or mutate Azure.'
+    Assert-Equal (Get-Content -Raw -LiteralPath $stateFile) $savedState 'Verification must not rewrite saved settings or keys.'
+    Assert-Equal (Get-Item -LiteralPath $stateFile).LastWriteTimeUtc $savedTimestamp 'Verification must not touch state.'
+    Assert-Equal $mock.Requests.Count 0 'Never send model traffic over HTTP in VerifyOnly.'
+    $mock.Approval = 'Pending'
+    $result = & $helper @verifyTarget
+    Assert-Equal $result.Status 'AwaitingApproval' 'VerifyOnly must report pending endpoint approval.'
+    $mock.Approval = 'Rejected'
+    Assert-Throws { & $helper @verifyTarget } 'Rejected'
+    $mock.Approval = 'Approved'
+    $mock.Health = 'Unhealthy'
+    Assert-Throws { & $helper @verifyTarget } 'backend is unhealthy'
+    $mock.Health = 'Healthy'
+    foreach ($override in @(@{ GenerateKeys = $true }, @{ ParameterFile = $parametersFile }, @{ Preview = $true }, @{ WhatIf = $true })) {
+        Assert-Throws { & $helper @verifyTarget @override } 'VerifyOnly cannot be combined'
+    }
+
+    Reset-Mock
+    Assert-Throws { & $helper @verifyTarget } 'VerifyOnly requires saved deployment state'
+    Assert-Equal (Test-Path -LiteralPath $stateFile) $false 'Missing state must not trigger bootstrap.'
 
     Reset-Mock
     $mock.DelayCommand = 'account show'
@@ -344,8 +387,24 @@ try {
     Assert-Equal $mock.Requests.Count 2 'Verify discovery and actual inference.'
     Assert-Equal $mock.Requests[0].Uri 'https://gateway.example.com/byok/team/models' 'Probe the public HTTPS gateway, not Foundry/APIM directly.'
     Assert-Equal $mock.Requests[1].MaximumRedirection 0 'Never forward org keys through redirects.'
+    $savedState = Get-Content -Raw -LiteralPath $stateFile
+    $savedTimestamp = (Get-Item -LiteralPath $stateFile).LastWriteTimeUtc
+    $mock.Calls.Clear()
+    $mock.Deployments.Clear()
+    $mock.Requests.Clear()
+    $result = & $helper @verifyTarget -Hostname verify.example.com -Model test-model
+    Assert-Equal $result.Status 'Verified' 'VerifyOnly must execute the shared HTTPS discovery and completion checks.'
+    Assert-Equal $result.ReadyForCopilot $true 'VerifyOnly may claim readiness only after successful inference.'
+    Assert-Equal $mock.Requests.Count 2 'VerifyOnly must check discovery and actual inference.'
+    Assert-Equal $mock.Requests[0].Uri 'https://verify.example.com/byok/team/models' 'Allow verification-only hostname overrides without persisting them.'
+    Assert-Equal @($mock.Calls | Where-Object { ($_ -join ' ') -match 'deployment |group create|provider register|account set' }).Count 0 'Successful verification must not redeploy or mutate infrastructure.'
+    Assert-Equal (Get-Content -Raw -LiteralPath $stateFile) $savedState 'Successful verification must preserve saved settings and secrets.'
+    Assert-Equal (Get-Item -LiteralPath $stateFile).LastWriteTimeUtc $savedTimestamp 'Successful verification must not touch state.'
+    $mock.Fail = 'apim show'
+    Assert-Throws { & $helper @verifyTarget } 'exit 9.*AuthorizationFailed for \[REDACTED\]'
+    $mock.Fail = ''
     $mock.EmptyCompletion = $true
-    Assert-Throws { & $helper @target -Hostname gateway.example.com -Model test-model } 'no assistant text'
+    Assert-Throws { & $helper @verifyTarget } 'no assistant text'
     $mock.EmptyCompletion = $false
     $mock.EmptyModels = $true
     Assert-Throws { & $helper @target -Hostname gateway.example.com -Model test-model } 'no deployments'
