@@ -10,6 +10,7 @@ $helperDirectory = Join-Path $scratch 'scripts'
 $null = New-Item -ItemType Directory -Path $helperDirectory
 $helper = Join-Path $helperDirectory 'deploy.ps1'
 Copy-Item -LiteralPath (Join-Path $root 'scripts\deploy.ps1') -Destination $helper
+Copy-Item -LiteralPath (Join-Path $root 'scripts\private-state.ps1') -Destination $helperDirectory
 $parametersFile = Join-Path $scratch 'input.json'
 $stateFile = Join-Path $scratch '.azure\deploy\gateway-sub\gateway-rg\state.json'
 $vnetId = '/subscriptions/gateway-sub/resourceGroups/gateway-rg/providers/Microsoft.Network/virtualNetworks/test-apim-appgw-vnet'

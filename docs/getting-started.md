@@ -73,9 +73,10 @@ Rerun without the original parameter file to reuse saved values; importing a fil
 explicitly overrides saved values. `-GenerateKeys` only fills missing keys; it never rotates
 existing ones. For multiple separate deployments, use separate resource groups.
 
-If verification fails after provisioning, inspect the reported error and the Azure deployment
-status. After correcting the cause, rerun with the same gateway subscription/resource group
-to reuse saved settings and keys; do not delete successful resources just to retry verification.
+If verification fails after provisioning, inspect the reported error and Azure deployment
+status. After correcting the cause, use [verification-only mode](#retry-verification-without-redeploying)
+to check the existing deployment without applying infrastructure changes. Do not delete
+successful resources just to retry verification.
 
 For an existing deployment, supply its private parameter file instead:
 
@@ -118,6 +119,27 @@ per-org models. Missing model selection returns `AwaitingModelVerification`; oth
 failures are errors. No credentials or model traffic are sent over HTTP or followed redirects.
 DNS links alone do not prove private name resolution: if inference fails, use
 [network troubleshooting](traffic-flow.md#common-failure-points) and APIM diagnostics.
+
+### Retry verification without redeploying
+
+After provisioning has succeeded, use `-VerifyOnly` to repeat the checks after fixing a
+verification issue, such as a DNS record pointing to an old gateway IP:
+
+```powershell
+.\scripts\deploy.ps1 -SubscriptionId '<gateway-subscription>' -ResourceGroup '<gateway-rg>' `
+  -Hostname 'copilot.example.com' -Model '<deployment-name>' -VerifyOnly
+```
+
+This uses the saved deployment settings and keys and checks the existing resources. It does
+not deploy or update infrastructure, generate keys, or change the saved state. It cannot
+create missing resources or enable HTTPS. Use a normal deployment when changes are needed.
+`-Hostname` and `-Model` are optional overrides for this check only; otherwise the helper
+uses saved values and prompts for a model if needed. The model must support Chat Completions
+and be available to all selected organizations.
+
+`Verified` / `ReadyForCopilot = true` means the checks passed. `AwaitingHttps` means HTTPS
+or the hostname is not configured; `AwaitingModelVerification` means HTTPS and model
+discovery passed but inference has not been verified. Other failures report an error.
 
 The helper accepts resolved JSON parameters or compiles `.bicepparam` with Bicep.
 Key Vault parameter references and explicit public/APIM-only topologies use the manual path below.
