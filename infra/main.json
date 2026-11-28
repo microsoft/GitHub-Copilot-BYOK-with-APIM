@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.38.33.27573",
-      "templateHash": "9293014700582866222"
+      "templateHash": "10964579322486659695"
     }
   },
   "parameters": {
@@ -451,9 +451,16 @@
     },
     "enablePrivateNetworking": {
       "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Keep Application Gateway public, put APIM in an internal VNet, and add private endpoints/DNS for primary and pool Foundry accounts. Enabled by default; requires deployAppGateway and the Developer or classic Premium APIM tier. Does not change existing Foundry public-access settings."
+      }
+    },
+    "foundryPrivateEndpointManualApproval": {
+      "type": "bool",
       "defaultValue": false,
       "metadata": {
-        "description": "Keep Application Gateway public, put APIM in an internal VNet, and add private endpoints/DNS for primary and pool Foundry accounts. Requires deployAppGateway and the Developer or classic Premium APIM tier. Does not change existing Foundry public-access settings."
+        "description": "Request manual owner approval for Foundry private endpoints instead of automatic approval. Preserve this setting on redeployment. Pending connections must be approved before inference works; this does not grant APIM data-plane access."
       }
     },
     "appGwName": {
@@ -1865,6 +1872,9 @@
           "foundryAccounts": {
             "value": "[variables('privateFoundryAccounts')]"
           },
+          "manualApproval": {
+            "value": "[parameters('foundryPrivateEndpointManualApproval')]"
+          },
           "tags": {
             "value": "[parameters('tags')]"
           }
@@ -1876,7 +1886,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.38.33.27573",
-              "templateHash": "983022401476943508"
+              "templateHash": "4986659271356360079"
             }
           },
           "parameters": {
@@ -1899,6 +1909,13 @@
                 "description": "Primary and pool accounts, each with accountName, subscriptionId, and resourceGroup."
               }
             },
+            "manualApproval": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "Use a manual connection request when the deployer cannot approve connections on the Foundry account. Keep the same mode on redeployment."
+              }
+            },
             "tags": {
               "type": "object",
               "defaultValue": {}
@@ -1913,6 +1930,20 @@
                   "name": "[variables('privateDnsZoneNames')[copyIndex('privateDnsZoneConfigs')]]",
                   "properties": {
                     "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneNames')[copyIndex('privateDnsZoneConfigs')])]"
+                  }
+                }
+              },
+              {
+                "name": "connections",
+                "count": "[length(parameters('foundryAccounts'))]",
+                "input": {
+                  "name": "foundry",
+                  "properties": {
+                    "privateLinkServiceId": "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('foundryAccounts')[copyIndex('connections')].subscriptionId, parameters('foundryAccounts')[copyIndex('connections')].resourceGroup), 'Microsoft.CognitiveServices/accounts', parameters('foundryAccounts')[copyIndex('connections')].accountName)]",
+                    "groupIds": [
+                      "account"
+                    ],
+                    "requestMessage": "[format('Private model access for gateway {0}. Please approve this connection.', parameters('namePrefix'))]"
                   }
                 }
               }
@@ -1968,17 +1999,8 @@
                 "subnet": {
                   "id": "[parameters('subnetId')]"
                 },
-                "privateLinkServiceConnections": [
-                  {
-                    "name": "foundry",
-                    "properties": {
-                      "privateLinkServiceId": "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('foundryAccounts')[copyIndex()].subscriptionId, parameters('foundryAccounts')[copyIndex()].resourceGroup), 'Microsoft.CognitiveServices/accounts', parameters('foundryAccounts')[copyIndex()].accountName)]",
-                      "groupIds": [
-                        "account"
-                      ]
-                    }
-                  }
-                ]
+                "privateLinkServiceConnections": "[if(parameters('manualApproval'), createArray(), createArray(variables('connections')[copyIndex()]))]",
+                "manualPrivateLinkServiceConnections": "[if(parameters('manualApproval'), createArray(variables('connections')[copyIndex()]), createArray())]"
               }
             },
             {
@@ -1997,7 +2019,19 @@
                 "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-foundry-pe-{1}', parameters('namePrefix'), copyIndex()))]"
               ]
             }
-          ]
+          ],
+          "outputs": {
+            "endpoints": {
+              "type": "array",
+              "copy": {
+                "count": "[length(parameters('foundryAccounts'))]",
+                "input": {
+                  "id": "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-foundry-pe-{1}', parameters('namePrefix'), copyIndex()))]",
+                  "accountId": "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', parameters('foundryAccounts')[copyIndex()].subscriptionId, parameters('foundryAccounts')[copyIndex()].resourceGroup), 'Microsoft.CognitiveServices/accounts', parameters('foundryAccounts')[copyIndex()].accountName)]"
+                }
+              }
+            }
+          }
         }
       },
       "dependsOn": [
@@ -2467,6 +2501,10 @@
     "applicationInsightsName": {
       "type": "string",
       "value": "[if(parameters('deployObservability'), reference(resourceId('Microsoft.Resources/deployments', 'observability'), '2025-04-01').outputs.appInsightsName.value, '')]"
+    },
+    "foundryPrivateEndpoints": {
+      "type": "array",
+      "value": "[if(variables('privateNetworkingEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'foundryPrivateNetwork'), '2025-04-01').outputs.endpoints.value, createArray())]"
     },
     "deploymentSummary": {
       "type": "object",

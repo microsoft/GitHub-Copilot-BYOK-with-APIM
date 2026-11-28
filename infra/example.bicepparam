@@ -19,8 +19,12 @@ param appGwSharedSecret = '<gateway-secret>'
 // Recommended setup: Application Gateway + WAF. Set false only for APIM-only deployments.
 param deployAppGateway = true
 
-// Optional: public gateway with private APIM and Foundry connections (Developer or classic Premium).
-param enablePrivateNetworking = false
+// Default: public gateway with internal APIM and private Foundry connections.
+// APIM-only deployments must explicitly set BOTH topology flags to false.
+param enablePrivateNetworking = true
+
+// If the Foundry owner must approve private endpoint requests, uncomment and keep on reruns.
+// param foundryPrivateEndpointManualApproval = true
 
 // New deployments create <appGwName>-nsg. To preserve a governance-owned NSG in this
 // resource group, set its existing name before redeploying. Only the client rule is managed.
@@ -38,7 +42,8 @@ param enablePrivateNetworking = false
 
 // Common overrides: uncomment only what you need.
 // Choose a production APIM tier deliberately; Developer is for testing.
-// param apimSkuName = 'StandardV2'
+// Private production networking uses classic Premium (not PremiumV2).
+// param apimSkuName = 'Premium'
 
 // Restrict which deployments this org may discover and call.
 // param orgModels = {

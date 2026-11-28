@@ -6,6 +6,8 @@ param vnetId string
 param subnetId string
 @description('Primary and pool accounts, each with accountName, subscriptionId, and resourceGroup.')
 param foundryAccounts array
+@description('Use a manual connection request when the deployer cannot approve connections on the Foundry account. Keep the same mode on redeployment.')
+param manualApproval bool = false
 param tags object = {}
 
 var privateDnsZoneNames = [
@@ -44,6 +46,17 @@ resource dnsLinks 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06
   }
 }]
 
+var connections = [for (account, i) in foundryAccounts: {
+  name: 'foundry'
+  properties: {
+    privateLinkServiceId: accounts[i].id
+    groupIds: [
+      'account'
+    ]
+    requestMessage: 'Private model access for gateway ${namePrefix}. Please approve this connection.'
+  }
+}]
+
 resource privateEndpoints 'Microsoft.Network/privateEndpoints@2023-11-01' = [for (account, i) in foundryAccounts: {
   name: '${namePrefix}-foundry-pe-${i}'
   location: location
@@ -52,18 +65,14 @@ resource privateEndpoints 'Microsoft.Network/privateEndpoints@2023-11-01' = [for
     subnet: {
       id: subnetId
     }
-    privateLinkServiceConnections: [
-      {
-        name: 'foundry'
-        properties: {
-          privateLinkServiceId: accounts[i].id
-          groupIds: [
-            'account'
-          ]
-        }
-      }
-    ]
+    privateLinkServiceConnections: manualApproval ? [] : [connections[i]]
+    manualPrivateLinkServiceConnections: manualApproval ? [connections[i]] : []
   }
+}]
+
+output endpoints array = [for (account, i) in foundryAccounts: {
+  id: privateEndpoints[i].id
+  accountId: accounts[i].id
 }]
 
 resource dnsZoneGroups 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-11-01' = [for (account, i) in foundryAccounts: {

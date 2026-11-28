@@ -3,6 +3,12 @@
 - **Status:** Accepted
 - **Date:** 2026-10-22
 
+> **Deployment defaults updated:** backend networking is now private by default.
+> The historical public-APIM and manual-secret-only decisions below are superseded by
+> the [guided deployment](../getting-started.md#guided-deployment-recommended): internal APIM,
+> existing Foundry private endpoints, explicit first-run key-generation consent, and
+> stable key reuse. Existing Foundry public-access settings are never changed.
+
 ## Context
 
 A client completed installation without Application Gateway. Both the template and example
